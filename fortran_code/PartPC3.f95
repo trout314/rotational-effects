@@ -32,7 +32,7 @@ MODULE GLOBAL
  !  NO is the number of valid sets of orbiting parameters.
  !  NOO stores the starting and ending indices for orbiting parameters.
  INTEGER,DIMENSION(:),ALLOCATABLE::NAITK,INOO,NO
- INTEGER,DIMENSION(2,INOOMAX)::NOO=0
+ INTEGER,DIMENSION(:,:,:),ALLOCATABLE::NOO
 
  !Declare the global real variables.
  !  HPI is half of the usual pi for circular functions.
@@ -221,9 +221,8 @@ SUBROUTINE INPUT
    ENDIF
  
  !Allocate the arrays
- !TO DO LARRY: Rank mismatch NOO below
  ALLOCATE(POTENR(NV),EXPON(NANG),CSHORT(NANG),POTENV(NV,NANG),NAITK(NANG),&
-   CPOTEN(NV,NANG),NOO(NV,2,INOOMAX),INOO(NANG),ECC(NV,2,INOOMAX))
+   CPOTEN(NV,NANG),NOO(NANG,2,INOOMAX),INOO(NANG),ECC(NANG,2,INOOMAX))
 
  !Set the value of NLONG for ion-neutral potentials.
  NLONG=4
@@ -600,7 +599,6 @@ SUBROUTINE REGIONS(JANGLE)
  !Set the first energy in the first region, and the pointer that
  !indicates the corresponding number of the orbiting set.
  ECC(JANGLE,1,1)=ORBIT(1,JANGLE,1)
- !TO DO LARRY: Fix rank mismatch for NOO error below and everywhere else!
  NOO(JANGLE,1,1)=1
 
  !Initially, the energies must be increasing.
@@ -631,8 +629,7 @@ SUBROUTINE REGIONS(JANGLE)
    !Treat the situation where the energies resume increasing.
    ELSEIF(.NOT.INCREASING.AND.ORBIT(1,J,JANGLE)>ORBIT(1,J-1,JANGLE))THEN
      ECC(JANGLE,1,INOO(JANGLE))=ORBIT(1,J-1,JANGLE)
-     ! LARRY TO DO: The array access needs three indexes in next line. Fix this.
-     !NOO(1,INOO(JANGLE))=J-1
+         NOO(JANGLE,1,INOO(JANGLE))=J-1
      INCREASING=.TRUE.
    ENDIF
  ENDDO
@@ -640,9 +637,8 @@ SUBROUTINE REGIONS(JANGLE)
  !Place the ending energy into ECC and the number of the
  !corresponding orbiting set into NOO.
  !TO DO LARRY: Fix incompatible ranks in assignment below
- ECC(JANGLE,2,INOO(JANGLE))=ORBIT(1,NO,JANGLE)
- ! LARRY TO DO: The array access needs three indexes in next line. Fix this.
- ! NOO(2,INOO(JANGLE))=NO(JANGLE)
+ ECC(JANGLE,2,INOO(JANGLE))=ORBIT(1,NO(JANGLE),JANGLE)
+ NOO(JANGLE,2,INOO(JANGLE))=NO(JANGLE)
 
  !Write information about the final region.
  WRITE(13,*)ECC(JANGLE,1,INOO(JANGLE)),"-",ECC(JANGLE,2,INOO(JANGLE)),&
@@ -700,4 +696,48 @@ REAL(SELECTED_REAL_KIND(18)) FUNCTION VF(R,PHI)
  PRINT *,R,PHI,VF
  STOP
 END FUNCTION VF
+
+REAL(SELECTED_REAL_KIND(18)) FUNCTION FIT(N,X,Y,Y2,XBAR)
+ !This function is based on Sec. 3.3 of "Numerical Recipes" (FORTRAN
+ !VERSION) by W. H. Press, B. P. Flannery, S. A. Teukolsky and W. T.
+ !Vetterling (Cambridge University Press, Cambridge, England, 1989).
+ !It computes the spline-fit function (See subroutine SPLINE).
+ USE GLOBAL
+ IMPLICIT NONE
+
+ !Declare the dummy variables.
+ INTEGER,INTENT(IN)::N
+ REAL(SELECTED_REAL_KIND(18)),DIMENSION(N),INTENT(IN)::X,Y,Y2
+ REAL(SELECTED_REAL_KIND(18)),INTENT(IN)::XBAR
+
+ !Declare the local variables.
+ INTEGER::KLOW,KHI,KMID
+ REAL(SELECTED_REAL_KIND(18))::XH,XA,XB
+
+ !Check for the case N=1.
+ IF(N<=1)THEN
+   PRINT *,'Subroutine FIT was called with N=',N
+   STOP
+ ENDIF
+
+ !Search for the correct subinterval containing XBAR.
+ KLOW=1
+ KHI=N
+ DO
+   IF(KHI-KLOW<=1)EXIT
+   KMID=(KHI+KLOW)/TWO
+   IF(X(KMID)>XBAR)THEN
+     KHI=KMID
+   ELSE
+     KLOW=KMID
+   ENDIF
+ ENDDO
+
+ !Evaluate the appropriate piece of Y(X).
+ XH=X(KHI)-X(KLOW)
+ XA=(X(KHI)-XBAR)/XH
+ XB=(XBAR-X(KLOW))/XH
+ FIT=XA*Y(KLOW)+XB*Y(KHI)+(XA*(XA*XA-ONE)*Y2(KLOW)+XB*(XB*XB-ONE)*&
+   Y2(KHI))*XH*XH/THREE/TWO
+END FUNCTION FIT
 
