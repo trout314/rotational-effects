@@ -1,274 +1,172 @@
+"""Compute transport cross-sections from intermolecular potentials.
+
+Reproduces the results of the Fortran program PC.f95 by L. A. Viehland.
+"""
+
 import numpy as np
 from scipy.interpolate import CubicSpline
-import matplotlib.pyplot as plt
 from scipy.integrate import quad
-from scipy.optimize import minimize_scalar, root_scalar
+from scipy.optimize import root_scalar
 
 
 # ---------------------------------------------------------------------------
-# Input data
+# Potential with extrapolation
 # ---------------------------------------------------------------------------
 
-potential_files_and_angles = [
-    ("PC.in.000", 0),   ("PC.in.010", 10),  ("PC.in.020", 20),  ("PC.in.030", 30),
-    ("PC.in.040", 40),  ("PC.in.050", 50),  ("PC.in.060", 60),  ("PC.in.070", 70),
-    ("PC.in.080", 80),  ("PC.in.090", 90),  ("PC.in.100", 100), ("PC.in.110", 110),
-    ("PC.in.120", 120), ("PC.in.130", 130), ("PC.in.140", 140), ("PC.in.150", 150),
-    ("PC.in.160", 160), ("PC.in.170", 170), ("PC.in.180", 180)]
+class Potential:
+    """Intermolecular potential V(r) with short- and long-range extrapolation.
 
-long_range_pow = -4
-minimum_energy = 1e-9
-maximum_energy = 1.0
+    Short range: V(r) = C * r^k  (power law fit to first two data points)
+    Mid range:   Clamped cubic spline through tabulated data
+    Long range:  V(r) = long_coef * r^long_range_pow
+
+    Provides V(r), V'(r), and V''(r) from a single spline.
+    """
+
+    def __init__(self, distances, energies, long_range_pow):
+        self.distances = np.asarray(distances, dtype=float)
+        self.energies = np.asarray(energies, dtype=float)
+        self.long_range_pow = long_range_pow
+        self.rmin = self.distances[0]
+        self.rmax = self.distances[-1]
+
+        # Short-range power law: V = short_coef * r^short_pow
+        self.short_pow = (np.log(energies[0] / energies[1])
+                          / np.log(distances[0] / distances[1]))
+        self.short_coef = energies[0] / distances[0]**self.short_pow
+
+        # Long-range: V = long_coef * r^long_range_pow
+        self.long_coef = energies[-1] / distances[-1]**long_range_pow
+
+        # Clamped cubic spline with matching derivatives at boundaries
+        short_deriv = self.short_coef * self.short_pow * distances[0]**(self.short_pow - 1)
+        long_deriv = self.long_coef * long_range_pow * distances[-1]**(long_range_pow - 1)
+        self._spline = CubicSpline(
+            distances, energies, bc_type=((1, short_deriv), (1, long_deriv)))
+        self._spline_d1 = self._spline.derivative(1)
+        self._spline_d2 = self._spline.derivative(2)
+
+    def __call__(self, r):
+        """Evaluate V(r)."""
+        if r < self.rmin:
+            return self.short_coef * r ** self.short_pow
+        elif r > self.rmax:
+            return self.long_coef * r ** self.long_range_pow
+        return float(self._spline(r))
+
+    def deriv(self, r):
+        """Evaluate V'(r)."""
+        if r < self.rmin:
+            return self.short_coef * self.short_pow * r ** (self.short_pow - 1)
+        elif r > self.rmax:
+            return self.long_coef * self.long_range_pow * r ** (self.long_range_pow - 1)
+        return float(self._spline_d1(r))
+
+    def deriv2(self, r):
+        """Evaluate V''(r)."""
+        if r < self.rmin:
+            return (self.short_coef * self.short_pow * (self.short_pow - 1)
+                    * r ** (self.short_pow - 2))
+        elif r > self.rmax:
+            n = self.long_range_pow
+            return self.long_coef * n * (n - 1) * r ** (n - 2)
+        return float(self._spline_d2(r))
 
 
 # ---------------------------------------------------------------------------
-# Read potential data from files
+# I/O
 # ---------------------------------------------------------------------------
-
-def read_potentials(files_and_angles):
-    given_potentials = {}
-    for filename, angle in files_and_angles:
-        with open(filename, "r") as f:
-            lines = [line.strip() for line in f.readlines()]
-            lines = lines[1:]
-            given_potentials[angle] = []
-            for line in lines:
-                distance, energy = [float(x) for x in line.split()]
-                given_potentials[angle].append((distance, energy))
-
-    angles_given = []
-    distances_given = {}
-    energies_given = {}
-    for angle, potential_values in given_potentials.items():
-        angles_given.append(angle)
-        distances_given[angle] = [distance for distance, _ in potential_values]
-        energies_given[angle] = [energy for _, energy in potential_values]
-
-    return angles_given, distances_given, energies_given
-
 
 def read_single_potential(filename):
-    """Read a single potential file in PC.in format (Fortran PC.f95 style).
+    """Read a potential file in PC.in format.
 
-    Format:
-      Line 1: comment
-      Line 2: accuracy, emin, emax
-      Line 3: NV (number of data points)
-      Line 4: NLONG
-      Lines 5..5+NV-1: R  V(R)
+    Returns (comment, accuracy, emin, emax, nlong, distances, energies).
     """
-    with open(filename, "r") as f:
+    with open(filename) as f:
         comment = f.readline().strip()
-        accuracy, emin, emax = [float(x) for x in f.readline().split()]
-        nv = int(f.readline().strip())
-        nlong = int(f.readline().strip())
-        distances = []
-        energies = []
-        for _ in range(nv):
-            parts = f.readline().split()
-            distances.append(float(parts[0]))
-            energies.append(float(parts[1]))
-    return comment, accuracy, emin, emax, nlong, distances, energies
+        accuracy, emin, emax = map(float, f.readline().split())
+        nv = int(f.readline())
+        nlong = int(f.readline())
+        data = np.loadtxt(f, max_rows=nv)
+    return comment, accuracy, emin, emax, nlong, data[:, 0].tolist(), data[:, 1].tolist()
+
+
+def read_potentials(files_and_angles):
+    """Read angle-dependent potentials from PC.in.XXX files."""
+    angles, distances, energies = [], {}, {}
+    for filename, angle in files_and_angles:
+        data = np.loadtxt(filename, skiprows=1)
+        angles.append(angle)
+        distances[angle] = data[:, 0].tolist()
+        energies[angle] = data[:, 1].tolist()
+    return angles, distances, energies
 
 
 # ---------------------------------------------------------------------------
-# Short-range extrapolation: fit first two points to V(r) = C * r^k
+# Orbiting scan
 # ---------------------------------------------------------------------------
 
-def get_short_range_power(distances, energies):
-    delta_log_potential = np.log(energies[0]) - np.log(energies[1])
-    delta_log_distance = np.log(distances[0]) - np.log(distances[1])
-    return delta_log_potential / delta_log_distance
+def orbiting_scan(pot, emin, nlong, clong, n_samples=300):
+    """Find orbiting parameters by root-finding the region boundaries.
 
-
-def get_short_range_coef(distances, energies):
-    power = get_short_range_power(distances, energies)
-    return energies[0] / distances[0]**power
-
-
-# ---------------------------------------------------------------------------
-# Extrapolated potential, first derivative, and second derivative
-# ---------------------------------------------------------------------------
-
-def _build_spline(distances, energies, long_range_pow):
-    """Build the clamped cubic spline used by all three potential functions."""
-    short_coef = get_short_range_coef(distances, energies)
-    short_pow = get_short_range_power(distances, energies)
-    short_deriv = short_coef * short_pow * distances[0]**(short_pow - 1)
-    long_coef = energies[-1] / distances[-1]**long_range_pow
-    long_deriv = long_coef * long_range_pow * distances[-1]**(long_range_pow - 1)
-    spline = CubicSpline(
-        distances, energies, bc_type=((1, short_deriv), (1, long_deriv)))
-    return spline, short_coef, short_pow, long_coef
-
-
-def create_extrapolated_potential(distances, energies, long_range_pow):
-    spline, short_coef, short_pow, long_coef = _build_spline(
-        distances, energies, long_range_pow)
-    rmin = min(distances)
-    rmax = max(distances)
-
-    def vf(r):
-        if r < rmin:
-            return short_coef * r ** short_pow
-        elif r > rmax:
-            return long_coef * r ** long_range_pow
-        else:
-            return float(spline(r))
-    return vf
-
-
-def create_derivative_potential(distances, energies, long_range_pow):
-    spline, short_coef, short_pow, long_coef = _build_spline(
-        distances, energies, long_range_pow)
-    deriv_spline = spline.derivative(1)
-    rmin = min(distances)
-    rmax = max(distances)
-
-    def vd(r):
-        if r < rmin:
-            return short_coef * short_pow * r ** (short_pow - 1)
-        elif r > rmax:
-            return long_coef * long_range_pow * r ** (long_range_pow - 1)
-        else:
-            return float(deriv_spline(r))
-    return vd
-
-
-def create_second_derivative_potential(distances, energies, long_range_pow):
-    spline, short_coef, short_pow, long_coef = _build_spline(
-        distances, energies, long_range_pow)
-    deriv2_spline = spline.derivative(2)
-    rmin = min(distances)
-    rmax = max(distances)
-
-    def vd2(r):
-        if r < rmin:
-            return short_coef * short_pow * (short_pow - 1) * r ** (short_pow - 2)
-        elif r > rmax:
-            return long_coef * long_range_pow * (long_range_pow - 1) * r ** (long_range_pow - 2)
-        else:
-            return float(deriv2_spline(r))
-    return vd2
-
-
-# ---------------------------------------------------------------------------
-# Orbiting detection (basic helpers)
-# ---------------------------------------------------------------------------
-
-def is_orbiting(r, vf, vd, vd2):
-    E = vf(r) + r * vd(r) / 2.0
-    if E <= 0.0:
-        return False
-    if vd(r) <= 0.0:
-        return False
-    if vd2(r) + 3 * vd(r) / r >= 0.0:
-        return False
-    return True
-
-
-def orbiting_params(r, vf, vd):
-    E = vf(r) + r * vd(r) / 2.0
-    b = np.sqrt(r**3 * vd(r) / (E * 2))
-    return (E, b, r)
-
-
-# ---------------------------------------------------------------------------
-# Step 1: Orbiting scan
-# ---------------------------------------------------------------------------
-
-def orbiting_scan(vf, vd, vd2, distances, emin, nlong, clong, n_samples=300):
-    """Find orbiting parameters by root-finding the orbiting region boundaries
-    and sampling on a fixed log-spaced grid.
-
-    Returns a list of (E, b, R) tuples ordered by increasing energy, and ED.
+    Returns (orbit_list, ED) where orbit_list is [(E, b, R), ...] sorted
+    by increasing energy.
     """
-    # The orbiting conditions are:
-    #   C1: V'(r) > 0
-    #   C2: V''(r) + 3*V'(r)/r < 0
-    #   C3: Veff = V(r) + r*V'(r)/2 > 0
-    # The orbiting energy at separation r is Eorb(r) = V(r) + r*V'(r)/2.
-
-    # Step 1: Find the inner boundary r_min where C2 = 0.
-    # This is where orbiting first becomes possible (going outward).
-    # Eorb(r_min) = EC (maximum orbiting energy).
     def c2_func(r):
-        return vd2(r) + 3 * vd(r) / r
+        return pot.deriv2(r) + 3 * pot.deriv(r) / r
 
-    r_scan = np.logspace(np.log10(distances[0]), 3, 5000)
-    r_min = None
-    for i in range(len(r_scan) - 1):
-        if c2_func(r_scan[i]) >= 0 and c2_func(r_scan[i + 1]) < 0:
-            r_min = root_scalar(c2_func, bracket=(r_scan[i], r_scan[i + 1]),
-                                method='brentq', xtol=1e-14).root
-            break
+    def eorb(r):
+        return pot(r) + r * pot.deriv(r) / 2
 
-    if r_min is None:
+    # Find inner boundary where c2 = 0 (this gives EC)
+    r_scan = np.logspace(np.log10(pot.rmin), 3, 5000)
+    c2_vals = np.array([c2_func(r) for r in r_scan])
+    sign_changes = np.where((c2_vals[:-1] >= 0) & (c2_vals[1:] < 0))[0]
+
+    if len(sign_changes) == 0:
         raise RuntimeError("Could not find inner orbiting boundary")
 
-    EC = vf(r_min) + r_min * vd(r_min) / 2
+    r_min = root_scalar(c2_func, bracket=(r_scan[sign_changes[0]], r_scan[sign_changes[0] + 1]),
+                        method='brentq', xtol=1e-14).root
+    EC = eorb(r_min)
 
-    # Step 2: Find the outer boundary r_max where Eorb(r) = emin.
-    def eorb_minus_emin(r):
-        return vf(r) + r * vd(r) / 2 - emin
+    # Find outer boundary where Eorb(r) = emin
+    eorb_vals = np.array([eorb(r) for r in r_scan])
+    mask = (r_scan > r_min) & (eorb_vals[:-1] if len(eorb_vals) > len(r_scan) else np.ones(len(r_scan), dtype=bool))
+    r_outer = r_scan[r_scan > r_min]
+    eorb_outer = np.array([eorb(r) for r in r_outer])
+    crossings = np.where((eorb_outer[:-1] - emin > 0) & (eorb_outer[1:] - emin <= 0))[0]
 
-    # Eorb decreases with r (for standard potentials), so scan outward
-    r_max = None
-    for i in range(len(r_scan) - 1):
-        if r_scan[i] > r_min:
-            ea = eorb_minus_emin(r_scan[i])
-            eb = eorb_minus_emin(r_scan[i + 1])
-            if ea > 0 and eb <= 0:
-                r_max = root_scalar(eorb_minus_emin,
-                                    bracket=(r_scan[i], r_scan[i + 1]),
-                                    method='brentq', xtol=1e-10).root
-                break
-
-    if r_max is None:
-        # Eorb may not reach emin within scan range; use the largest r
-        # where orbiting conditions still hold
+    if len(crossings) > 0:
+        r_max = root_scalar(lambda r: eorb(r) - emin,
+                            bracket=(r_outer[crossings[0]], r_outer[crossings[0] + 1]),
+                            method='brentq', xtol=1e-10).root
+    else:
         r_max = r_scan[-1]
 
-    # Step 3: Sample on a fixed log-spaced grid within [r_min, r_max].
+    # Sample on fixed log-spaced grid
     r_grid = np.logspace(np.log10(r_min + 1e-10), np.log10(r_max), n_samples)
-
     orbit_list = []
     for r in r_grid:
-        c1 = vd(r)
-        c2 = vd2(r) + 3 * c1 / r
-        v = vf(r)
-        veff = v + r * c1 / 2
-
+        c1 = pot.deriv(r)
+        c2 = pot.deriv2(r) + 3 * c1 / r
+        veff = pot(r) + r * c1 / 2
         if c1 > 0 and c2 < 0 and veff > 0:
-            b = np.sqrt(r**3 * c1 / (2 * veff))
-            orbit_list.append((veff, b, r))
+            orbit_list.append((veff, np.sqrt(r**3 * c1 / (2 * veff)), r))
 
-    # Reverse so energy increases (r increases => E decreases, so reverse)
-    orbit_list.reverse()
+    orbit_list.reverse()  # increasing energy
 
-    # Handle NLONG=3 with CLONG<0: find ED (minimum orbiting energy)
-    if nlong == 3 and clong < 0:
-        ed = orbit_list[0][0] if orbit_list else 0.0
-    else:
-        ed = 0.0
-
+    ed = orbit_list[0][0] if (nlong == 3 and clong < 0 and orbit_list) else 0.0
     return orbit_list, ed
 
-
-# ---------------------------------------------------------------------------
-# Step 2: Orbiting regions
-# ---------------------------------------------------------------------------
 
 def orbiting_regions(orbit_list):
     """Partition orbiting parameters into monotonically increasing energy regions.
 
-    Returns:
-        regions: list of (E_low, E_high, idx_low, idx_high) tuples
-        EC: maximum orbiting energy
-        ED: minimum orbiting energy (0 if not applicable)
+    Returns list of (E_low, E_high, idx_low, idx_high) tuples.
     """
     if not orbit_list:
-        return [], 0.0
+        return []
 
     regions = []
     increasing = True
@@ -284,592 +182,446 @@ def orbiting_regions(orbit_list):
             start_E = orbit_list[j - 1][0]
             increasing = True
 
-    # Final region
     regions.append((start_E, orbit_list[-1][0], start_idx, len(orbit_list) - 1))
-
-    EC = max(r[1] for r in regions)  # max of all E_high values
     return regions
 
 
 # ---------------------------------------------------------------------------
-# Step 3: Turning point finder
+# Cross-section solver
 # ---------------------------------------------------------------------------
 
-def find_turning_point(E, b, vf, vd, distances, nlong, clong, EC=0.0, acc1=8e-4,
-                       r_guess=None):
-    """Find the turning point R where E - V(R) - E*b^2/R^2 = 0.
+class CrossSectionSolver:
+    """Computes transport cross-sections Q^(1)..Q^(ell_max) at given energies.
 
-    Uses scipy brentq with robust bracket finding. r_guess provides an
-    initial estimate for the search region.
+    Encapsulates the potential, orbiting data, and numerical parameters.
     """
-    def Y(r):
-        return E - vf(r) - E * b**2 / r**2
 
-    rmin_tab = distances[0]
-    rmax_tab = distances[-1]
+    def __init__(self, pot, orbit_list, regions, nlong, clong, accuracy):
+        self.pot = pot
+        self.orbit_list = orbit_list
+        self.regions = regions
+        self.nlong = nlong
+        self.clong = clong
+        self.accuracy = accuracy
+        self.acc1 = 0.8 * accuracy
+        self.EC = max(r[1] for r in regions) if regions else 0.0
+        self.ED = 0.0  # Set externally for nlong=3 case
+        self.EC2 = 10 * self.EC
 
-    # Analytical shortcut for NLONG=4 with large impact parameter
-    if nlong == 4 and b > 0:
-        if E * b**4 >= 4 * clong:
-            ra = np.sqrt(b * b / 2 * (1 + np.sqrt(1 - 4 * clong / E / b**4)))
-            if ra >= rmax_tab:
+    # -- Turning point finder ------------------------------------------------
+
+    def find_turning_point(self, E, b, r_guess=None):
+        """Find R where E - V(R) - E*b²/R² = 0."""
+        pot = self.pot
+
+        def Y(r):
+            return E - pot(r) - E * b**2 / r**2
+
+        # Analytical shortcut for NLONG=4
+        if self.nlong == 4 and b > 0 and E * b**4 >= 4 * self.clong:
+            ra = np.sqrt(b**2 / 2 * (1 + np.sqrt(1 - 4 * self.clong / E / b**4)))
+            if ra >= pot.rmax:
                 return ra, b
 
-    # Strategy: scan to find a bracket [r_lo, r_hi] where Y changes sign.
-    # Y(r) = E - V(r) - E*b^2/r^2
-    # At the turning point, Y = 0. For small r, V(r) is large positive
-    # so Y < 0. For large r, V(r) -> 0 and E*b^2/r^2 -> 0, so Y -> E > 0.
-    # We want the innermost root (smallest r where Y = 0).
+        # Bracket finding: scan from initial guess
+        r0 = r_guess if r_guess is not None else pot.rmax
+        r0 = max(r0, pot.rmin)
+        scale = 0.999 if (self.EC > 0 and 0.99 * self.EC < E < 1.01 * self.EC) else 0.95
 
-    # Build a scan grid centered on the guess
-    r0 = r_guess if r_guess is not None else rmax_tab
-    r0 = max(r0, rmin_tab)
-
-    # Scan inward from r0 to find where Y goes negative
-    r_neg = None
-    r_pos = None
-    r = r0
-    scale = 0.95
-    if EC > 0 and 0.99 * EC < E < 1.01 * EC:
-        scale = 0.999
-
-    # First, find a point where Y > 0 (should be easy at large r)
-    for _ in range(500):
-        if Y(r) > 0:
-            r_pos = r
-            break
-        r /= scale
-        if r > 1e8:
-            break
-    if r_pos is None:
-        # Try large r
-        r_pos = 1e4
-        if Y(r_pos) <= 0:
-            r_pos = None
-
-    # Then scan inward from r_pos to find where Y < 0
-    if r_pos is not None:
-        r = r_pos
-        for _ in range(2000):
-            r *= scale
-            if r < 0.3 * rmin_tab:
+        # Find r_pos (Y > 0) and r_neg (Y < 0)
+        r_pos = r_neg = None
+        r = r0
+        for _ in range(500):
+            if Y(r) > 0:
+                r_pos = r
                 break
+            r /= scale
+        if r_pos is None:
+            if Y(1e4) > 0:
+                r_pos = 1e4
+
+        if r_pos is not None:
+            r = r_pos
+            for _ in range(2000):
+                r *= scale
+                if r < 0.3 * pot.rmin:
+                    break
+                if Y(r) < 0:
+                    r_neg = r
+                    break
+
+        if r_neg is None or r_pos is None:
+            r = 0.5 * pot.rmin
             if Y(r) < 0:
                 r_neg = r
-                break
+                r = pot.rmin
+                for _ in range(2000):
+                    r /= scale
+                    if Y(r) > 0:
+                        r_pos = r
+                        break
+                    if r > 1e6:
+                        break
 
-    # If that didn't work, scan from the small-r end outward
-    if r_neg is None or r_pos is None:
-        r = 0.5 * rmin_tab
-        if Y(r) < 0:
-            r_neg = r
-            r = rmin_tab
-            for _ in range(2000):
-                r *= 1.0 / scale
-                if Y(r) > 0:
-                    r_pos = r
-                    break
-                if r > 1e6:
-                    break
+        if r_neg is None or r_pos is None:
+            raise RuntimeError(f"Could not bracket turning point: E={E}, b={b}")
 
-    if r_neg is None or r_pos is None:
-        raise RuntimeError(
-            f"Could not bracket turning point: E={E}, b={b}, "
-            f"r_neg={r_neg}, r_pos={r_pos}")
+        lo, hi = min(r_neg, r_pos), max(r_neg, r_pos)
+        r = root_scalar(Y, bracket=[lo, hi], method='brentq',
+                        xtol=1e-14, rtol=1e-14).root
 
-    # Ensure r_neg < r_pos and they bracket a root
-    if r_neg > r_pos:
-        r_neg, r_pos = r_pos, r_neg
-    if Y(r_neg) > 0 and Y(r_pos) < 0:
-        r_neg, r_pos = r_pos, r_neg
-
-    # Use brentq for precise root finding
-    r = root_scalar(Y, bracket=[min(r_neg, r_pos), max(r_neg, r_pos)],
-                    method='brentq', xtol=1e-14, rtol=1e-14).root
-
-    # Adjust b to compensate for small errors in R (critical for accuracy)
-    bc = 1 - vf(r) / E
-    if bc >= 0:
-        b_adj = r * np.sqrt(bc)
-    else:
+        # Adjust b for consistency
+        bc = 1 - pot(r) / E
         b_adj = r * np.sqrt(abs(bc))
-    return r, b_adj
+        return r, b_adj
 
+    # -- Orbiting at specific energy -----------------------------------------
 
-# ---------------------------------------------------------------------------
-# Step 4: Deflection angle
-# ---------------------------------------------------------------------------
+    def find_orbiting_at_energy(self, E):
+        """Directly solve for orbiting (b, R) at energy E."""
+        pot = self.pot
+        r_scan = np.logspace(np.log10(pot.rmin), 3, 3000)
 
-def deflection_angle(E, b, vf, vd, distances, nlong, clong, EC, acc1,
-                     naitk=0, BO=None, RO=None, ROMAX=0):
-    """Compute the scattering angle theta at energy E, impact parameter b.
-
-    Uses the Fortran ANGLE algorithm with GA/GB integrands.
-    """
-    HPI = np.pi / 2
-
-    if b <= 0:
-        raise ValueError(f"Impact parameter b={b} must be positive")
-
-    # Determine which case applies
-    ED = 0.0  # Will be passed in context
-    case1 = True
-    if naitk >= 2 and BO is not None:
-        for i in range(naitk - 1):
-            if BO[i] <= b < BO[i + 1]:
-                case1 = False
-                break
-
-    if case1:
-        # Section 6.3.1: non-orbiting deflection angle
-        r_guess = ROMAX if ROMAX > 0 else distances[-1]
-        rm, b_adj = find_turning_point(E, b, vf, vd, distances, nlong, clong, EC, acc1,
-                                       r_guess=r_guess)
-
-        # Endpoint values
-        denom = 1 - rm**3 * vd(rm) / (2 * b_adj**2 * E)
-        if denom <= 0:
-            denom = abs(denom) + 1e-30
-        ea = 1 - 1 / np.sqrt(denom)
-        eb = 1 - b_adj / rm
-
-        # GA integrand
-        def ga(y):
-            r = rm / np.cos(np.pi * (y + 1) / 4)
-            val = 1 - (b_adj / r)**2 - vf(r) / E
-            if val <= 0:
-                # Taylor series near turning point
-                val = (r - rm) * (2 * b_adj**2 / rm**3 - vf(rm) / E)
-            if val <= 0:
-                return 0.0
-            return 1 - b_adj / rm * np.sin(np.pi * (y + 1) / 4) / np.sqrt(val)
-
-        # Use adaptive quadrature
-        result, _ = quad(ga, -1, 1, limit=200, epsrel=acc1)
-
-        # Check for small-angle case
-        theta = HPI * result
-        return theta
-
-    else:
-        # Section 6.3.2: orbiting deflection angle
-        rbar = max(RO[:naitk])
-        r_guess = 0.5 * rbar
-        rm, b_adj = find_turning_point(E, b, vf, vd, distances, nlong, clong, EC, acc1)
-        if rm >= rbar:
-            rm, rbar = rbar, rm
-            rm, b_adj = find_turning_point(E, b_adj, vf, vd, distances, nlong, clong, EC, acc1)
-
-        # Endpoint values
-        ea = 1.0
-        denom = 1 - rm**3 * vd(rm) / (2 * E * b_adj**2)
-        if denom <= 0:
-            # retry
-            rm, b_adj = find_turning_point(E, b_adj, vf, vd, distances, nlong, clong, EC, acc1)
-            denom = 1 - rm**3 * vd(rm) / (2 * E * b_adj**2)
-            if denom <= 0:
-                denom = abs(denom) + 1e-30
-        eb = 1 - b_adj / rbar - np.arccos(rm / rbar) / np.sqrt(denom)
-
-        def gb(y):
-            # Part 1: R from rbar outward
-            r8 = rbar / np.cos(np.pi * (y + 1) / 4)
-            z3 = 1 - (b_adj / r8)**2 - vf(r8) / E
-            if z3 != 0:
-                z3_abs = abs(z3)
-                func = 1 - b_adj / rbar * np.sin(np.pi * (y + 1) / 4) / np.sqrt(z3_abs)
+        # Evaluate Eorb - E across scan, tracking sign changes within orbiting region
+        prev_diff = prev_r = None
+        crossings = []
+        for r in r_scan:
+            c1 = pot.deriv(r)
+            c2 = pot.deriv2(r) + 3 * c1 / r
+            veff = pot(r) + r * c1 / 2
+            if c1 > 0 and c2 < 0 and veff > 0:
+                diff = veff - E
+                if prev_diff is not None and prev_diff * diff < 0:
+                    crossings.append((prev_r, r))
+                prev_diff, prev_r = diff, r
             else:
-                return ea
+                prev_diff = None
 
-            # Part 2: R from rm to rbar
-            z1 = np.arccos(rm / rbar)
-            z2 = z1 * np.cos(np.pi * (y + 1) / 4)
-            r7 = rm / np.cos(z2)
-            z3b = 1 - (b_adj / r7)**2 - vf(r7) / E
-            if z3b > 0:
-                func -= b_adj / rm * z1 * np.sin(z2) * np.sin(np.pi * (1 + y) / 4) / np.sqrt(z3b)
-            else:
-                if abs(y) < 1e-15:
-                    func = ea
-                else:
-                    func = eb
-
-            return func
-
-        result, _ = quad(gb, -1, 1, limit=200, epsrel=acc1)
-        theta = HPI * result
-        return theta
-
-
-# ---------------------------------------------------------------------------
-# Step 5: Cross-section integrand (qint) and EofB
-# ---------------------------------------------------------------------------
-
-def eofb(b, temp, E, ell_max, vf, vd, distances, nlong, clong, EC, acc1,
-         naitk, BO, RO, ROMAX):
-    """Compute temp * (1 - cos(theta)^L) for L=1..ell_max."""
-    theta = deflection_angle(E, b, vf, vd, distances, nlong, clong, EC, acc1,
-                             naitk, BO, RO, ROMAX)
-    cos_theta = np.cos(theta)
-    return np.array([temp * (1 - cos_theta**L) for L in range(1, ell_max + 1)])
-
-
-def qint(y, E, ell_max, vf, vd, distances, nlong, clong,
-         orbit_list, regions, EC, ED, acc1,
-         naitk, BO, RO, ROMAX, BOMAX):
-    """Cross-section integrand at integration point y in [-1, 1]."""
-    HPI = np.pi / 2
-    NO = len(orbit_list)
-    EC2 = 10 * EC
-
-    fun = np.zeros(ell_max)
-
-    # Regime 1: ED <= E <= EC (orbiting present)
-    if E >= ED and E <= EC and len(orbit_list) > 0:
-        # Piece 1: smallest orbiting impact parameter
-        if y <= -1 or y >= 1:
-            return fun
-        b2 = BO[0] * np.cos(np.pi * (y + 1) / 4)
-        temp = (HPI * BO[0])**2 * np.sin(HPI * (y + 1))
-        fun = eofb(b2, temp, E, ell_max, vf, vd, distances, nlong, clong, EC, acc1,
-                    naitk, BO, RO, ROMAX)
-
-        # Piece 2: intermediate orbiting impact parameters
-        if y < 1:
-            for i in range(naitk - 1):
-                rbar = (RO[i] + RO[i + 1]) / 2
-                x11 = 4 / np.pi * np.arcsin(min(RO[i], RO[i + 1]) / rbar) - 1
-                x1 = ((1 - x11) * y + x11 + 1) / 2
-                r1 = rbar * np.sin(np.pi * (x1 + 1) / 4)
-                bc = 1 - vf(r1) / E
-                if bc < 0:
-                    continue
-                b2 = r1 * np.sqrt(bc)
-                temp = (HPI * rbar)**2 / 2 * (1 - x11) * np.sin(HPI * (x1 + 1)) * \
-                    (1 - vf(r1) / E - r1 / 2 * vd(r1) / E)
-                ans = eofb(b2, temp, E, ell_max, vf, vd, distances, nlong, clong, EC, acc1,
-                           naitk, BO, RO, ROMAX)
-                if RO[i] < RO[i + 1]:
-                    fun += ans
-                else:
-                    fun -= ans
-
-        if y > -1:
-            for i in range(naitk - 1):
-                rbar = (RO[i] + RO[i + 1]) / 2
-                ro_max_i = max(RO[i], RO[i + 1])
-                x12 = 4 / np.pi * np.arccos(rbar / ro_max_i) - 1
-                x2 = ((1 + x12) * y + x12 - 1) / 2
-                r2 = ro_max_i * np.cos(np.pi * (x2 + 1) / 4)
-                bc = 1 - vf(r2) / E
-                if bc < 0:
-                    continue
-                b2 = r2 * np.sqrt(bc)
-                temp = (HPI * ro_max_i)**2 / 2 * (1 + x12) * np.sin(HPI * (x2 + 1)) * \
-                    (1 - vf(r2) / E - r2 / 2 * vd(r2) / E)
-                ans = eofb(b2, temp, E, ell_max, vf, vd, distances, nlong, clong, EC, acc1,
-                           naitk, BO, RO, ROMAX)
-                if RO[i] < RO[i + 1]:
-                    fun += ans
-                else:
-                    fun -= ans
-
-        # Piece 3: large orbiting impact parameters
-        if -1 < y < 1:
-            x3 = (1 + y) / 2
-            sin_val = np.sin(HPI * x3)
-            if sin_val > 0:
-                r3 = RO[naitk - 1] / sin_val
-                bc = 1 - vf(r3) / E
-                if bc > 0:
-                    b2 = r3 * np.sqrt(bc)
-                    temp = (HPI * RO[naitk - 1])**2 * 2 * (r3 / RO[naitk - 1])**3 * \
-                        np.cos(HPI * x3) * (1 - vf(r3) / E - r3 / 2 * vd(r3) / E)
-                    ans = eofb(b2, temp, E, ell_max, vf, vd, distances, nlong, clong, EC, acc1,
-                               naitk, BO, RO, ROMAX)
-                    fun += ans
-
-    # Regime 2: EC < E <= EC2 (above orbiting)
-    elif E > ED and E <= EC2:
-        # Find R1: root of E - V(R) - E*ROMAX^2/R^2 = 0, initial guess = ROMAX
-        r1_guess = ROMAX if ROMAX > 0 else distances[-1]
-        r1, _ = find_turning_point(E, ROMAX, vf, vd, distances, nlong, clong, EC, acc1,
-                                   r_guess=r1_guess)
-        # Find R2: root of E - V(R) = 0 (b=0), initial guess = R1
-        r2, _ = find_turning_point(E, 0.0, vf, vd, distances, nlong, clong, EC, acc1,
-                                   r_guess=r1)
-
-        if y <= -1:
-            fun = np.zeros(ell_max)
-            for L in range(2, ell_max + 1, 2):
-                fun[L - 1] = -np.pi * r2**2 * (r1 - r2) * vd(r2) / E
-        elif y >= 1:
-            temp = np.pi * r1 * (r1 - r2) * (1 - vf(r1) / E - r1 / 2 * vd(r1) / E)
-            fun = eofb(ROMAX, temp, E, ell_max, vf, vd, distances, nlong, clong, EC, acc1,
-                       naitk, BO, RO, ROMAX)
-        else:
-            # Piece 1: linear mapping
-            r4 = ((r1 - r2) * y + r1 + r2) / 2
-            bc = 1 - vf(r4) / E
-            if bc < 0:
-                bc = abs(bc)
-            b2 = r4 * np.sqrt(bc)
-            temp = np.pi * (r1 - r2) * r4 * (1 - vf(r4) / E - r4 / 2 * vd(r4) / E)
-            fun = eofb(b2, temp, E, ell_max, vf, vd, distances, nlong, clong, EC, acc1,
-                       naitk, BO, RO, ROMAX)
-
-            # Piece 2: arcsine mapping
-            x3 = (1 + y) / 2
-            r5 = r1 / np.sin(HPI * x3) if np.sin(HPI * x3) > 0 else 1e10
-            bc = 1 - vf(r5) / E
-            if bc > 0:
-                b2 = r5 * np.sqrt(bc)
-                temp = (HPI * r1)**2 * 2 * (r5 / r1)**3 * np.cos(HPI * x3) * \
-                    (1 - vf(r5) / E - r5 / 2 * vd(r5) / E)
-                ans = eofb(b2, temp, E, ell_max, vf, vd, distances, nlong, clong, EC, acc1,
-                           naitk, BO, RO, ROMAX)
-                fun += ans
-
-    # Regime 3: E < ED or E > EC2 (far from orbiting)
-    else:
-        if NO == 0:
-            return fun
-        if E < ED:
-            b_ref = orbit_list[0][1]
-        else:
-            b_ref = orbit_list[-1][1]
-
-        if y <= -1:
-            fun = np.zeros(ell_max)
-        elif y >= 1:
-            temp = 2 * np.pi * b_ref**2
-            fun = eofb(b_ref, temp, E, ell_max, vf, vd, distances, nlong, clong, EC, acc1,
-                       naitk, BO, RO, ROMAX)
-        else:
-            # Piece 1: linear mapping
-            b2 = b_ref / 2 * (y + 1)
-            temp = HPI * b_ref**2 * (y + 1)
-            fun = eofb(b2, temp, E, ell_max, vf, vd, distances, nlong, clong, EC, acc1,
-                       naitk, BO, RO, ROMAX)
-
-            # Piece 2: inverse mapping
-            b2 = b_ref * 2 / (y + 1)
-            temp = np.pi * b_ref**2 * (2 / (y + 1))**3
-            ans = eofb(b2, temp, E, ell_max, vf, vd, distances, nlong, clong, EC, acc1,
-                       naitk, BO, RO, ROMAX)
-            fun += ans
-
-    return fun
-
-
-# ---------------------------------------------------------------------------
-# Step 6: Orbiting interpolation at given energy
-# ---------------------------------------------------------------------------
-
-def interpolate_orbiting(E, orbit_list, regions, vf):
-    """Interpolate orbiting parameters at energy E.
-
-    Returns BO, RO arrays (sorted by increasing BO) and naitk.
-    """
-    BO_list = []
-    RO_list = []
-
-    for e_low, e_high, idx_low, idx_high in regions:
-        if E < e_low or E > e_high:
-            BO_list.append(0.0)
-            RO_list.append(0.0)
-        elif E <= e_low:
-            BO_list.append(orbit_list[idx_low][1])
-            RO_list.append(orbit_list[idx_low][2])
-        elif E >= e_high:
-            BO_list.append(orbit_list[idx_high][1])
-            RO_list.append(orbit_list[idx_high][2])
-        else:
-            # Interpolation within this region
-            n_pts = idx_high - idx_low + 1
-            exx = np.array([orbit_list[idx_low + k][0] for k in range(n_pts)])
-            bxx = np.array([orbit_list[idx_low + k][1] for k in range(n_pts)])
-            rxx = np.array([orbit_list[idx_low + k][2] for k in range(n_pts)])
-
-            if n_pts >= 4:
-                b_spline = CubicSpline(exx, bxx, bc_type='natural')
-                r_spline = CubicSpline(exx, rxx, bc_type='natural')
-                BO_list.append(float(b_spline(E)))
-                RO_list.append(float(r_spline(E)))
-            elif n_pts >= 2:
-                BO_list.append(float(np.interp(E, exx, bxx)))
-                RO_list.append(float(np.interp(E, exx, rxx)))
-            else:
-                BO_list.append(bxx[0])
-                RO_list.append(rxx[0])
+        BO, RO = [], []
+        for r_lo, r_hi in crossings:
+            try:
+                r_root = root_scalar(
+                    lambda r: pot(r) + r * pot.deriv(r) / 2 - E,
+                    bracket=[r_lo, r_hi], method='brentq', xtol=1e-12).root
+                c1 = pot.deriv(r_root)
+                c2 = pot.deriv2(r_root) + 3 * c1 / r_root
+                veff = pot(r_root) + r_root * c1 / 2
+                if c1 > 0 and c2 < 0 and veff > 0:
+                    bc = 1 - pot(r_root) / E
+                    BO.append(r_root * np.sqrt(abs(bc)) if bc >= 0
+                              else np.sqrt(r_root**3 * c1 / (2 * veff)))
+                    RO.append(r_root)
+            except (ValueError, RuntimeError):
                 continue
 
-    # Eliminate invalid entries, adjust BO from RO
-    BO_valid = []
-    RO_valid = []
-    for i in range(len(RO_list)):
-        if RO_list[i] > 0:
-            bc = 1 - vf(RO_list[i]) / E
-            if bc >= 0:
-                BO_valid.append(RO_list[i] * np.sqrt(bc))
+        if BO:
+            pairs = sorted(zip(BO, RO))
+            return [p[0] for p in pairs], [p[1] for p in pairs], len(pairs)
+        return [], [], 0
+
+    def interpolate_orbiting(self, E):
+        """Interpolate orbiting parameters from pre-computed table."""
+        BO_list, RO_list = [], []
+        for e_low, e_high, idx_low, idx_high in self.regions:
+            if E < e_low or E > e_high:
+                BO_list.append(0.0); RO_list.append(0.0)
+            elif E <= e_low:
+                BO_list.append(self.orbit_list[idx_low][1])
+                RO_list.append(self.orbit_list[idx_low][2])
+            elif E >= e_high:
+                BO_list.append(self.orbit_list[idx_high][1])
+                RO_list.append(self.orbit_list[idx_high][2])
             else:
-                BO_valid.append(BO_list[i])
-            RO_valid.append(RO_list[i])
-
-    # Sort by increasing BO
-    if BO_valid:
-        pairs = sorted(zip(BO_valid, RO_valid), key=lambda x: x[0])
-        BO_sorted = [p[0] for p in pairs]
-        RO_sorted = [p[1] for p in pairs]
-    else:
-        BO_sorted = []
-        RO_sorted = []
-
-    return BO_sorted, RO_sorted, len(BO_sorted)
-
-
-def find_orbiting_at_energy(E, vf, vd, vd2, distances):
-    """Directly find the orbiting separation and impact parameter at energy E
-    by solving V(r) + r*V'(r)/2 = E for r.
-
-    This avoids interpolation errors from a pre-computed table.
-    Returns (BO, RO, naitk) or empty if no orbiting at this energy.
-    """
-    # The orbiting energy as a function of r is: Eorb(r) = V(r) + r*V'(r)/2
-    # We need to find r where Eorb(r) = E, subject to the orbiting conditions.
-
-    # Scan to find all r values where orbiting conditions hold and Eorb crosses E
-    rmin_tab = distances[0]
-    rmax_tab = distances[-1]
-
-    r = rmin_tab
-    crossings = []
-    prev_diff = None
-
-    while r < 1000:
-        c1 = vd(r)
-        c2 = vd2(r) + 3 * c1 / r
-        v = vf(r)
-        veff = v + r * c1 / 2.0
-
-        if c1 > 0 and c2 < 0 and veff > 0:
-            diff = veff - E
-            if prev_diff is not None and prev_diff * diff < 0:
-                # Sign change — there's a root between prev_r and r
-                crossings.append((prev_r, r))
-            prev_diff = diff
-            prev_r = r
-        else:
-            prev_diff = None
-
-        if r > rmax_tab:
-            r *= 1.05
-        else:
-            r *= 1.01
-
-    # Refine each crossing
-    BO_list = []
-    RO_list = []
-    for r_lo, r_hi in crossings:
-        def eorb_minus_E(r):
-            return vf(r) + r * vd(r) / 2.0 - E
-        try:
-            r_root = root_scalar(eorb_minus_E, bracket=[r_lo, r_hi],
-                                 method='brentq', xtol=1e-12).root
-            # Verify orbiting conditions at the root
-            c1 = vd(r_root)
-            c2 = vd2(r_root) + 3 * c1 / r_root
-            veff = vf(r_root) + r_root * c1 / 2.0
-            if c1 > 0 and c2 < 0 and veff > 0:
-                bc = 1 - vf(r_root) / E
-                if bc >= 0:
-                    BO_list.append(r_root * np.sqrt(bc))
+                n = idx_high - idx_low + 1
+                exx = np.array([self.orbit_list[idx_low + k][0] for k in range(n)])
+                bxx = np.array([self.orbit_list[idx_low + k][1] for k in range(n)])
+                rxx = np.array([self.orbit_list[idx_low + k][2] for k in range(n)])
+                if n >= 4:
+                    BO_list.append(float(CubicSpline(exx, bxx, bc_type='natural')(E)))
+                    RO_list.append(float(CubicSpline(exx, rxx, bc_type='natural')(E)))
                 else:
-                    BO_list.append(np.sqrt(r_root**3 * c1 / (2 * veff)))
-                RO_list.append(r_root)
-        except (ValueError, RuntimeError):
-            continue
+                    BO_list.append(float(np.interp(E, exx, bxx)))
+                    RO_list.append(float(np.interp(E, exx, rxx)))
 
-    if BO_list:
-        pairs = sorted(zip(BO_list, RO_list), key=lambda x: x[0])
-        return [p[0] for p in pairs], [p[1] for p in pairs], len(pairs)
-    return [], [], 0
+        # Filter, adjust, sort
+        BO_valid, RO_valid = [], []
+        for bo, ro in zip(BO_list, RO_list):
+            if ro > 0:
+                bc = 1 - self.pot(ro) / E
+                BO_valid.append(ro * np.sqrt(bc) if bc >= 0 else bo)
+                RO_valid.append(ro)
+
+        if BO_valid:
+            pairs = sorted(zip(BO_valid, RO_valid))
+            return [p[0] for p in pairs], [p[1] for p in pairs], len(pairs)
+        return [], [], 0
+
+    # -- Deflection angle ----------------------------------------------------
+
+    def deflection_angle(self, E, b, naitk, BO, RO, ROMAX):
+        """Compute scattering angle theta at energy E, impact parameter b."""
+        HPI = np.pi / 2
+        pot = self.pot
+
+        # Determine case
+        case1 = True
+        if naitk >= 2 and BO is not None:
+            for i in range(naitk - 1):
+                if BO[i] <= b < BO[i + 1]:
+                    case1 = False
+                    break
+
+        if case1:
+            r_guess = ROMAX if ROMAX > 0 else pot.rmax
+            rm, b_adj = self.find_turning_point(E, b, r_guess=r_guess)
+
+            denom = 1 - rm**3 * pot.deriv(rm) / (2 * b_adj**2 * E)
+            if denom <= 0:
+                denom = abs(denom) + 1e-30
+
+            def ga(y):
+                r = rm / np.cos(np.pi * (y + 1) / 4)
+                val = 1 - (b_adj / r)**2 - pot(r) / E
+                if val <= 0:
+                    val = (r - rm) * (2 * b_adj**2 / rm**3 - pot(rm) / E)
+                if val <= 0:
+                    return 0.0
+                return 1 - b_adj / rm * np.sin(np.pi * (y + 1) / 4) / np.sqrt(val)
+
+            result, _ = quad(ga, -1, 1, limit=200, epsrel=self.acc1)
+            return HPI * result
+
+        else:
+            rbar = max(RO[:naitk])
+            rm, b_adj = self.find_turning_point(E, b)
+            if rm >= rbar:
+                rm, rbar = rbar, rm
+                rm, b_adj = self.find_turning_point(E, b_adj)
+
+            denom = 1 - rm**3 * pot.deriv(rm) / (2 * E * b_adj**2)
+            if denom <= 0:
+                rm, b_adj = self.find_turning_point(E, b_adj)
+                denom = 1 - rm**3 * pot.deriv(rm) / (2 * E * b_adj**2)
+                if denom <= 0:
+                    denom = abs(denom) + 1e-30
+
+            ea = 1.0
+            eb = 1 - b_adj / rbar - np.arccos(rm / rbar) / np.sqrt(denom)
+
+            def gb(y):
+                r8 = rbar / np.cos(np.pi * (y + 1) / 4)
+                z3 = 1 - (b_adj / r8)**2 - pot(r8) / E
+                if z3 == 0:
+                    return ea
+                func = 1 - b_adj / rbar * np.sin(np.pi * (y + 1) / 4) / np.sqrt(abs(z3))
+
+                z1 = np.arccos(rm / rbar)
+                z2 = z1 * np.cos(np.pi * (y + 1) / 4)
+                r7 = rm / np.cos(z2)
+                z3b = 1 - (b_adj / r7)**2 - pot(r7) / E
+                if z3b > 0:
+                    func -= (b_adj / rm * z1 * np.sin(z2)
+                             * np.sin(np.pi * (1 + y) / 4) / np.sqrt(z3b))
+                else:
+                    func = ea if abs(y) < 1e-15 else eb
+                return func
+
+            result, _ = quad(gb, -1, 1, limit=200, epsrel=self.acc1)
+            return HPI * result
+
+    # -- EofB: deflection -> cross-section integrand -------------------------
+
+    def eofb(self, b, temp, E, ell_max, naitk, BO, RO, ROMAX):
+        """Return temp * (1 - cos(theta)^L) for L=1..ell_max."""
+        theta = self.deflection_angle(E, b, naitk, BO, RO, ROMAX)
+        ct = np.cos(theta)
+        # Vectorized power computation
+        ct_powers = ct ** np.arange(1, ell_max + 1)
+        return temp * (1 - ct_powers)
+
+    # -- QINT: cross-section integrand ---------------------------------------
+
+    def qint(self, y, E, ell_max, naitk, BO, RO, ROMAX, BOMAX):
+        """Cross-section integrand at point y in [-1, 1].
+
+        Returns array of length ell_max.
+        """
+        HPI = np.pi / 2
+        pot = self.pot
+        NO = len(self.orbit_list)
+        fun = np.zeros(ell_max)
+
+        # Regime 1: orbiting (ED <= E <= EC)
+        if E >= self.ED and E <= self.EC and NO > 0:
+            if y <= -1 or y >= 1:
+                return fun
+
+            # Piece 1: small b (0 to BO[0])
+            b2 = BO[0] * np.cos(np.pi * (y + 1) / 4)
+            temp = (HPI * BO[0])**2 * np.sin(HPI * (y + 1))
+            fun = self.eofb(b2, temp, E, ell_max, naitk, BO, RO, ROMAX)
+
+            # Piece 2a: intermediate (lower half of each RO pair)
+            if y < 1:
+                for i in range(naitk - 1):
+                    rbar = (RO[i] + RO[i + 1]) / 2
+                    x11 = 4 / np.pi * np.arcsin(min(RO[i], RO[i + 1]) / rbar) - 1
+                    x1 = ((1 - x11) * y + x11 + 1) / 2
+                    r1 = rbar * np.sin(np.pi * (x1 + 1) / 4)
+                    bc = 1 - pot(r1) / E
+                    if bc < 0:
+                        continue
+                    b2 = r1 * np.sqrt(bc)
+                    temp = ((HPI * rbar)**2 / 2 * (1 - x11)
+                            * np.sin(HPI * (x1 + 1))
+                            * (1 - pot(r1) / E - r1 / 2 * pot.deriv(r1) / E))
+                    ans = self.eofb(b2, temp, E, ell_max, naitk, BO, RO, ROMAX)
+                    fun += ans if RO[i] < RO[i + 1] else -ans
+
+            # Piece 2b: intermediate (upper half)
+            if y > -1:
+                for i in range(naitk - 1):
+                    rbar = (RO[i] + RO[i + 1]) / 2
+                    ro_max_i = max(RO[i], RO[i + 1])
+                    x12 = 4 / np.pi * np.arccos(rbar / ro_max_i) - 1
+                    x2 = ((1 + x12) * y + x12 - 1) / 2
+                    r2 = ro_max_i * np.cos(np.pi * (x2 + 1) / 4)
+                    bc = 1 - pot(r2) / E
+                    if bc < 0:
+                        continue
+                    b2 = r2 * np.sqrt(bc)
+                    temp = ((HPI * ro_max_i)**2 / 2 * (1 + x12)
+                            * np.sin(HPI * (x2 + 1))
+                            * (1 - pot(r2) / E - r2 / 2 * pot.deriv(r2) / E))
+                    ans = self.eofb(b2, temp, E, ell_max, naitk, BO, RO, ROMAX)
+                    fun += ans if RO[i] < RO[i + 1] else -ans
+
+            # Piece 3: large b (RO outward)
+            if -1 < y < 1:
+                x3 = (1 + y) / 2
+                sin_val = np.sin(HPI * x3)
+                if sin_val > 0:
+                    r3 = RO[naitk - 1] / sin_val
+                    bc = 1 - pot(r3) / E
+                    if bc > 0:
+                        b2 = r3 * np.sqrt(bc)
+                        temp = ((HPI * RO[naitk - 1])**2 * 2
+                                * (r3 / RO[naitk - 1])**3
+                                * np.cos(HPI * x3)
+                                * (1 - pot(r3) / E - r3 / 2 * pot.deriv(r3) / E))
+                        fun += self.eofb(b2, temp, E, ell_max, naitk, BO, RO, ROMAX)
+
+        # Regime 2: above orbiting (EC < E <= 10*EC)
+        elif E > self.ED and E <= self.EC2:
+            r1_guess = ROMAX if ROMAX > 0 else pot.rmax
+            r1, _ = self.find_turning_point(E, ROMAX, r_guess=r1_guess)
+            r2, _ = self.find_turning_point(E, 0.0, r_guess=r1)
+
+            if y <= -1:
+                for L in range(2, ell_max + 1, 2):
+                    fun[L - 1] = -np.pi * r2**2 * (r1 - r2) * pot.deriv(r2) / E
+            elif y >= 1:
+                temp = np.pi * r1 * (r1 - r2) * (1 - pot(r1) / E - r1 / 2 * pot.deriv(r1) / E)
+                fun = self.eofb(ROMAX, temp, E, ell_max, naitk, BO, RO, ROMAX)
+            else:
+                r4 = ((r1 - r2) * y + r1 + r2) / 2
+                bc = 1 - pot(r4) / E
+                b2 = r4 * np.sqrt(abs(bc))
+                temp = np.pi * (r1 - r2) * r4 * (1 - pot(r4) / E - r4 / 2 * pot.deriv(r4) / E)
+                fun = self.eofb(b2, temp, E, ell_max, naitk, BO, RO, ROMAX)
+
+                x3 = (1 + y) / 2
+                sin_val = np.sin(HPI * x3)
+                if sin_val > 0:
+                    r5 = r1 / sin_val
+                    bc = 1 - pot(r5) / E
+                    if bc > 0:
+                        b2 = r5 * np.sqrt(bc)
+                        temp = ((HPI * r1)**2 * 2 * (r5 / r1)**3
+                                * np.cos(HPI * x3)
+                                * (1 - pot(r5) / E - r5 / 2 * pot.deriv(r5) / E))
+                        fun += self.eofb(b2, temp, E, ell_max, naitk, BO, RO, ROMAX)
+
+        # Regime 3: far from orbiting
+        else:
+            if NO == 0:
+                return fun
+            b_ref = self.orbit_list[0][1] if E < self.ED else self.orbit_list[-1][1]
+
+            if y <= -1:
+                pass
+            elif y >= 1:
+                fun = self.eofb(b_ref, 2 * np.pi * b_ref**2, E, ell_max,
+                                naitk, BO, RO, ROMAX)
+            else:
+                b2 = b_ref / 2 * (y + 1)
+                temp = HPI * b_ref**2 * (y + 1)
+                fun = self.eofb(b2, temp, E, ell_max, naitk, BO, RO, ROMAX)
+
+                b2 = b_ref * 2 / (y + 1)
+                temp = np.pi * b_ref**2 * (2 / (y + 1))**3
+                fun += self.eofb(b2, temp, E, ell_max, naitk, BO, RO, ROMAX)
+
+        return fun
+
+    # -- Main entry point ----------------------------------------------------
+
+    def compute(self, E, ell_max=30):
+        """Compute transport cross-sections Q^(1)..Q^(ell_max) at energy E."""
+        # Set up orbiting data
+        naitk, BO, RO, ROMAX, BOMAX = 0, [], [], 0.0, 0.0
+
+        if E >= self.ED and E <= self.EC and self.orbit_list:
+            BO, RO, naitk = self.find_orbiting_at_energy(E)
+            if not BO:
+                BO, RO, naitk = self.interpolate_orbiting(E)
+            if RO:
+                ROMAX, BOMAX = max(RO), max(BO)
+        elif self.orbit_list:
+            ROMAX = self.orbit_list[-1][2]
+            BOMAX = self.orbit_list[-1][1]
+
+        # Integrate all ell values simultaneously
+        def integrand(y):
+            return self.qint(y, E, ell_max, naitk, BO, RO, ROMAX, BOMAX)
+
+        # quad only handles scalar functions, so we integrate component by
+        # component but cache the integrand evaluation to avoid redundant
+        # deflection angle computations at the same y.
+        cache = {}
+
+        def cached_integrand(y, L_idx):
+            if y not in cache:
+                cache[y] = integrand(y)
+            return cache[y][L_idx]
+
+        cross_sections = np.zeros(ell_max)
+        for L_idx in range(ell_max):
+            cache.clear()
+            val, _ = quad(cached_integrand, -1, 1, args=(L_idx,),
+                          limit=200, epsrel=self.acc1)
+            cross_sections[L_idx] = val
+
+        return cross_sections
 
 
 # ---------------------------------------------------------------------------
-# Step 7: Cross-section at single energy
+# Full computation driver
 # ---------------------------------------------------------------------------
 
-def compute_cross_sections(E, ell_max, vf, vd, vd2, distances, nlong, clong,
-                           orbit_list, regions, EC, ED, accuracy):
-    """Compute transport cross-sections Q^(1)..Q^(ell_max) at energy E."""
-    acc1 = 0.8 * accuracy
-    EC2 = 10 * EC
-
-    # Set up orbiting data for this energy
-    naitk = 0
-    BO = []
-    RO = []
-    ROMAX = 0.0
-    BOMAX = 0.0
-
-    if E >= ED and E <= EC and len(orbit_list) > 0:
-        # Use direct solver for orbiting parameters at this energy
-        BO, RO, naitk = find_orbiting_at_energy(E, vf, vd, vd2, distances)
-        if not BO:
-            # Fall back to interpolation
-            BO, RO, naitk = interpolate_orbiting(E, orbit_list, regions, vf)
-        if RO:
-            ROMAX = max(RO)
-            BOMAX = max(BO)
-    else:
-        if orbit_list:
-            ROMAX = orbit_list[-1][2]
-            BOMAX = orbit_list[-1][1]
-
-    # Define the integrand as a function of y only
-    def integrand_component(y, L_index):
-        result = qint(y, E, ell_max, vf, vd, distances, nlong, clong,
-                      orbit_list, regions, EC, ED, acc1,
-                      naitk, BO, RO, ROMAX, BOMAX)
-        return result[L_index]
-
-    # Integrate for each L
-    cross_sections = np.zeros(ell_max)
-    # More efficient: integrate all L at once by computing the full vector at each y
-    # Use a vectorized approach with quad for each component
-    for L_idx in range(ell_max):
-        val, err = quad(integrand_component, -1, 1, args=(L_idx,),
-                        limit=200, epsrel=acc1)
-        cross_sections[L_idx] = val
-
-    return cross_sections
-
-
-# ---------------------------------------------------------------------------
-# Step 8: Energy grid and full computation
-# ---------------------------------------------------------------------------
-
-def compute_all_cross_sections(vf, vd, vd2, distances, emin, emax, accuracy,
-                               nlong, clong, ell_max=30):
+def compute_all_cross_sections(pot, emin, emax, accuracy, nlong, clong, ell_max=30):
     """Compute transport cross-sections across the full energy range."""
-    # Step 1: Find orbiting parameters
-    orbit_list, ED = orbiting_scan(vf, vd, vd2, distances, emin, nlong, clong)
-    print(f"Found {len(orbit_list)} orbiting parameter sets")
-
-    # Step 2: Determine regions
+    orbit_list, ED = orbiting_scan(pot, emin, nlong, clong)
     regions = orbiting_regions(orbit_list)
-    EC = max(r[1] for r in regions) if regions else 0.0
-    EC2 = 10 * EC
-    print(f"ED = {ED:.6e}, EC = {EC:.6e}")
-    print(f"Number of orbiting regions: {len(regions)}")
 
-    # Adjust emax
-    emax = min(emax, vf(distances[0]))
+    solver = CrossSectionSolver(pot, orbit_list, regions, nlong, clong, accuracy)
+    solver.ED = ED
 
-    # Build energy grid using log-Chebyshev nodes in 3 regions
-    all_results = []
+    EC = solver.EC
+    EC2 = solver.EC2
+    emax = min(emax, pot(pot.rmin))
 
+    # Log-Chebyshev energy grids across 3 regions
     region_bounds = []
     if EC > emin:
         region_bounds.append((emin, min(EC, emax)))
@@ -878,27 +630,20 @@ def compute_all_cross_sections(vf, vd, vd2, distances, emin, emax, accuracy,
     if EC2 < emax:
         region_bounds.append((max(EC2, emin), emax))
 
+    all_results = []
     for e1, e2 in region_bounds:
         if e1 >= e2:
             continue
-        log_e1 = np.log10(e1)
-        log_e2 = np.log10(e2)
-
-        # Start with a modest number of points
+        log_e1, log_e2 = np.log10(e1), np.log10(e2)
         nm = 5
         for idx in range(nm):
-            log_e = (log_e2 + log_e1) / 2 - (log_e2 - log_e1) / 2 * \
-                np.cos(idx * np.pi / (nm - 1))
-            energy = 10**log_e
-            print(f"Computing cross-sections at E = {energy:.6e}")
-            cs = compute_cross_sections(energy, ell_max, vf, vd, vd2,
-                                        distances, nlong, clong,
-                                        orbit_list, regions, EC, ED, accuracy)
+            energy = 10**((log_e2 + log_e1) / 2
+                          - (log_e2 - log_e1) / 2 * np.cos(idx * np.pi / (nm - 1)))
+            cs = solver.compute(energy, ell_max)
             all_results.append((energy, cs))
 
-    # Sort by energy
     all_results.sort(key=lambda x: x[0])
-    return all_results, orbit_list, regions, EC, ED
+    return all_results, solver
 
 
 # ---------------------------------------------------------------------------
@@ -906,53 +651,34 @@ def compute_all_cross_sections(vf, vd, vd2, distances, emin, emax, accuracy,
 # ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
-    import sys
-
-    # Read input
     comment, accuracy, emin, emax, nlong, distances, energies = \
         read_single_potential("PC.in")
 
-    long_range_pow = -nlong
-
-    # Build potential functions
-    vf = create_extrapolated_potential(distances, energies, long_range_pow)
-    vd = create_derivative_potential(distances, energies, long_range_pow)
-    vd2 = create_second_derivative_potential(distances, energies, long_range_pow)
-
-    # Compute CLONG (same as Fortran: -V(R_last)*R_last^NLONG)
+    pot = Potential(distances, energies, -nlong)
     clong = -energies[-1] * distances[-1]**nlong
 
     print(f"Comment: {comment}")
     print(f"Accuracy: {accuracy}, EMIN: {emin}, EMAX: {emax}, NLONG: {nlong}")
     print(f"CLONG: {clong}")
-    print(f"Number of potential points: {len(distances)}")
 
-    # Step 1: Orbiting scan
-    orbit_list, ED = orbiting_scan(vf, vd, vd2, distances, emin, nlong, clong)
-    print(f"\nFound {len(orbit_list)} sets of orbiting parameters")
-    print(f"{'E':>24s} {'B':>24s} {'RM':>24s}")
-    for E_orb, b_orb, r_orb in orbit_list:
-        print(f"{E_orb:24.14e} {b_orb:24.14e} {r_orb:24.14e}")
-
-    # Step 2: Regions
+    orbit_list, ED = orbiting_scan(pot, emin, nlong, clong)
     regions = orbiting_regions(orbit_list)
     EC = max(r[1] for r in regions) if regions else 0.0
-    print(f"\nED = {ED:.14e}")
-    print(f"EC = {EC:.14e}")
-    print("Orbiting energy regions:")
-    for i, (e_low, e_high, idx_low, idx_high) in enumerate(regions):
-        print(f"  Region {i + 1}: {e_low:.14e} - {e_high:.14e}")
 
-    # Step 7-8: Compute cross-sections at a few test energies from PC.out
-    test_energies = [1e-9, 6.48e-9, 5.9e-7, 5.37e-5, 3.48e-4]
+    print(f"\n{len(orbit_list)} orbiting sets, EC = {EC:.14e}")
+    print(f"{'E':>24s} {'B':>24s} {'RM':>24s}")
+    for E_orb, b_orb, r_orb in orbit_list[:5]:
+        print(f"{E_orb:24.14e} {b_orb:24.14e} {r_orb:24.14e}")
+    print("...")
+    for E_orb, b_orb, r_orb in orbit_list[-3:]:
+        print(f"{E_orb:24.14e} {b_orb:24.14e} {r_orb:24.14e}")
+
+    solver = CrossSectionSolver(pot, orbit_list, regions, nlong, clong, accuracy)
+    solver.ED = ED
+
+    # Test at energies from Fortran output
+    test_energies = [1e-9, 6.48e-9, 5.9e-7, 5.37e-5, 3.48e-4, 5e-4]
     print("\nCross-section results:")
     for E_test in test_energies:
-        if E_test > emax:
-            continue
-        print(f"\n  E = {E_test:.6e}")
-        cs = compute_cross_sections(E_test, 30, vf, vd, vd2, distances,
-                                    nlong, clong, orbit_list, regions,
-                                    EC, ED, accuracy)
-        # Print first 6 values (Q1 through Q6)
-        for i in range(0, min(30, len(cs)), 2):
-            print(f"    Q({i+1:2d})={cs[i]:12.4f}  Q({i+2:2d})={cs[i+1]:12.4f}")
+        cs = solver.compute(E_test, 30)
+        print(f"  E={E_test:.2e}  Q(1)={cs[0]:10.1f}  Q(2)={cs[1]:10.1f}")
