@@ -35,7 +35,7 @@ TOLERANCE_PERCENT = 0.5
 
 
 def build_solver(angle):
-    data = np.loadtxt(f"PC.in.{angle:03d}", skiprows=1)
+    data = np.loadtxt(f"data/PC.in.{angle:03d}", skiprows=1)
     distances = data[:, 0].tolist()
     energies = data[:, 1].tolist()
 

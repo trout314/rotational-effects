@@ -652,7 +652,7 @@ def compute_all_cross_sections(pot, emin, emax, accuracy, nlong, clong, ell_max=
 
 if __name__ == "__main__":
     comment, accuracy, emin, emax, nlong, distances, energies = \
-        read_single_potential("PC.in")
+        read_single_potential("data/PC.in")
 
     pot = Potential(distances, energies, -nlong)
     clong = -energies[-1] * distances[-1]**nlong
