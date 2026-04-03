@@ -10,15 +10,19 @@ fortran_code/PartPC3
 PCforBMM
 *.mod
 
-# Fortran/program output files (may appear at top level or in data/)
-PC.out
-PC.out.*
-PC3.out
-Q1.*
-crsect.*
-crosec
-crosec.*
-coeffs
-coeffs.*
-ninval
-ninval.*
+# Compiled Fortran binaries (may appear in data/ from manual runs)
+data/PCforBMM
+data/*.mod
+
+# Fortran/program output files (in data/)
+data/PC.out
+data/PC.out.*
+data/PC3.out
+data/Q1.*
+data/crsect.*
+data/crosec
+data/crosec.*
+data/coeffs
+data/coeffs.*
+data/ninval
+data/ninval.*
