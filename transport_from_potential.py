@@ -174,128 +174,85 @@ def orbiting_params(r, vf, vd):
 
 
 # ---------------------------------------------------------------------------
-# Step 1: Fortran-style orbiting scan
+# Step 1: Orbiting scan
 # ---------------------------------------------------------------------------
 
-def orbiting_scan(vf, vd, vd2, distances, emin, nlong, clong):
-    """Scan for orbiting parameters using the Fortran PC.f95 algorithm.
+def orbiting_scan(vf, vd, vd2, distances, emin, nlong, clong, n_samples=300):
+    """Find orbiting parameters by root-finding the orbiting region boundaries
+    and sampling on a fixed log-spaced grid.
 
-    Returns a list of (E, b, R) tuples, ordered by increasing energy
-    within each monotonic segment.
+    Returns a list of (E, b, R) tuples ordered by increasing energy, and ED.
     """
-    MAXORBITS = 600
-    rmin_tab = distances[0]
-    rmax_tab = distances[-1]
+    # The orbiting conditions are:
+    #   C1: V'(r) > 0
+    #   C2: V''(r) + 3*V'(r)/r < 0
+    #   C3: Veff = V(r) + r*V'(r)/2 > 0
+    # The orbiting energy at separation r is Eorb(r) = V(r) + r*V'(r)/2.
 
-    # Phase 1: Initial scan with 1%/5% steps + 7-iteration refinement
-    # Store from the end of a large array, working downward (like Fortran)
-    orbit = [[0.0, 0.0, 0.0] for _ in range(MAXORBITS + 1)]
-    no = MAXORBITS + 1  # next available slot (counting down)
+    # Step 1: Find the inner boundary r_min where C2 = 0.
+    # This is where orbiting first becomes possible (going outward).
+    # Eorb(r_min) = EC (maximum orbiting energy).
+    def c2_func(r):
+        return vd2(r) + 3 * vd(r) / r
 
-    r = rmin_tab
-    while True:
+    r_scan = np.logspace(np.log10(distances[0]), 3, 5000)
+    r_min = None
+    for i in range(len(r_scan) - 1):
+        if c2_func(r_scan[i]) >= 0 and c2_func(r_scan[i + 1]) < 0:
+            r_min = root_scalar(c2_func, bracket=(r_scan[i], r_scan[i + 1]),
+                                method='brentq', xtol=1e-14).root
+            break
+
+    if r_min is None:
+        raise RuntimeError("Could not find inner orbiting boundary")
+
+    EC = vf(r_min) + r_min * vd(r_min) / 2
+
+    # Step 2: Find the outer boundary r_max where Eorb(r) = emin.
+    def eorb_minus_emin(r):
+        return vf(r) + r * vd(r) / 2 - emin
+
+    # Eorb decreases with r (for standard potentials), so scan outward
+    r_max = None
+    for i in range(len(r_scan) - 1):
+        if r_scan[i] > r_min:
+            ea = eorb_minus_emin(r_scan[i])
+            eb = eorb_minus_emin(r_scan[i + 1])
+            if ea > 0 and eb <= 0:
+                r_max = root_scalar(eorb_minus_emin,
+                                    bracket=(r_scan[i], r_scan[i + 1]),
+                                    method='brentq', xtol=1e-10).root
+                break
+
+    if r_max is None:
+        # Eorb may not reach emin within scan range; use the largest r
+        # where orbiting conditions still hold
+        r_max = r_scan[-1]
+
+    # Step 3: Sample on a fixed log-spaced grid within [r_min, r_max].
+    r_grid = np.logspace(np.log10(r_min + 1e-10), np.log10(r_max), n_samples)
+
+    orbit_list = []
+    for r in r_grid:
         c1 = vd(r)
         c2 = vd2(r) + 3 * c1 / r
-        c3 = vf(r)
-        veff = c3 + r * c1 / 2.0
+        v = vf(r)
+        veff = v + r * c1 / 2
 
         if c1 > 0 and c2 < 0 and veff > 0:
-            no -= 1
-            if no <= 0:
-                raise RuntimeError("More room needed for orbiting parameters")
-            orbit[no] = [veff, np.sqrt(r**3 * c1 / veff / 2), r]
+            b = np.sqrt(r**3 * c1 / (2 * veff))
+            orbit_list.append((veff, b, r))
 
-            # 7-iteration refinement
-            for i in range(1, 8):
-                while True:
-                    r_try = (1 - 0.001**i) * orbit[no][2]
-                    c1t = vd(r_try)
-                    c2t = vd2(r_try) + 3 * c1t / r_try
-                    c3t = vf(r_try)
-                    veff_t = c3t + r_try * c1t / 2.0
-                    if c1t > 0 and c2t < 0 and veff_t > orbit[no][0]:
-                        orbit[no] = [veff_t, np.sqrt(r_try**3 * c1t / veff_t / 2), r_try]
-                        if no == MAXORBITS:
-                            continue  # CYCLE in Fortran: keep refining first point
-                    break
+    # Reverse so energy increases (r increases => E decreases, so reverse)
+    orbit_list.reverse()
 
-        # Exit condition
-        if no <= MAXORBITS:
-            if 0 < orbit[no][0] <= emin:
-                break
-
-        # Step R
-        if r > rmax_tab:
-            r = 1.05 * r
-        else:
-            r = 1.01 * r
-
-        if r > 1000:
-            if no > MAXORBITS:
-                raise RuntimeError("No orbiting found up to 1000 bohr")
-            break
-
-    # Phase 1b: Handle NLONG=3 with CLONG<0 (find ED)
+    # Handle NLONG=3 with CLONG<0: find ED (minimum orbiting energy)
     if nlong == 3 and clong < 0:
-        orbit[0] = orbit[no][:]
-        for i in range(1, 8):
-            while True:
-                r_try = (1 + 0.001**i) * orbit[0][2]
-                c1t = vd(r_try)
-                c2t = vd2(r_try) + 3 * c1t / r_try
-                c3t = vf(r_try)
-                veff_t = c3t + r_try * c1t / 2.0
-                if c1t > 0 and c2t < 0 and veff_t < orbit[0][0]:
-                    orbit[0] = [veff_t, np.sqrt(r_try**3 * c1t / veff_t / 2), r_try]
-                break
-        j = 1
-        no += 1
-        ed = orbit[0][0]
+        ed = orbit_list[0][0] if orbit_list else 0.0
     else:
-        j = 0
         ed = 0.0
 
-    # Phase 2: Consolidate and add intermediate points in energy-decreasing regions
-    while True:
-        j += 1
-        orbit[j] = orbit[no][:]
-        no += 1
-        if no > MAXORBITS:
-            break
-        if j > no - 19:
-            raise RuntimeError("Not enough room for orbiting parameters")
-
-        # If energies decrease, add up to 19 interpolated points
-        if no < MAXORBITS:
-            if orbit[j][0] > orbit[no][0]:
-                k = j
-                for ii in range(1, 20):
-                    r_try = (float(20 - ii) * orbit[k][2] + float(ii) * orbit[no][2]) / 20.0
-                    c1t = vd(r_try)
-                    c2t = vd2(r_try) + 3 * c1t / r_try
-                    c3t = vf(r_try)
-                    veff_t = c3t + r_try * c1t / 2.0
-                    if c1t > 0 and c2t < 0 and veff_t > orbit[j][0]:
-                        j += 1
-                        orbit[j] = [veff_t, np.sqrt(r_try**3 * c1t / veff_t / 2), r_try]
-        else:
-            if orbit[j][0] < orbit[j - 1][0]:
-                for ii in range(1, 20):
-                    r_try = orbit[j][2] + float(ii) / 20.0 * (orbit[j][2] - orbit[j - 1][2])
-                    c1t = vd(r_try)
-                    c2t = vd2(r_try) + 3 * c1t / r_try
-                    c3t = vf(r_try)
-                    veff_t = c3t + r_try * c1t / 2.0
-                    if c1t > 0 and c2t < 0 and veff_t > orbit[j][0]:
-                        j += 1
-                        orbit[j] = [veff_t, np.sqrt(r_try**3 * c1t / veff_t / 2), r_try]
-
-    # Phase 3: Chop off trailing points where energy decreases
-    while j > 1 and orbit[j][0] < orbit[j - 1][0]:
-        j -= 1
-
-    result = [(orbit[i][0], orbit[i][1], orbit[i][2]) for i in range(1, j + 1)]
-    return result, ed
+    return orbit_list, ed
 
 
 # ---------------------------------------------------------------------------
