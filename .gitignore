@@ -2,3 +2,23 @@ __pycache__/
 *.pyc
 .ipynb_checkpoints/
 .DS_Store
+
+# Compiled Fortran binaries
+fortran_code/PC
+fortran_code/PCforBMM
+fortran_code/PartPC3
+PCforBMM
+*.mod
+
+# Fortran/program output files
+PC.out
+PC.out.*
+PC3.out
+Q1.*
+crsect.*
+crosec
+crosec.*
+coeffs
+coeffs.*
+ninval
+ninval.*

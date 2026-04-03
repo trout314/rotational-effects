@@ -1,0 +1,8 @@
+Test run: single angle (0 degrees)
+Ion-neutral potential
+NLONG=4 assumed
+angle 0 only
+0.001  1E-9  0.0005
+44  1
+180
+PC.in.000
