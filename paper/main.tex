@@ -1,0 +1,543 @@
+\documentclass[article]{revtex4-2}
+\usepackage{amsmath}
+\usepackage{bm}
+\usepackage{relsize}
+\usepackage{xcolor}
+\usepackage{mathtools}
+\usepackage{graphics}
+\usepackage{overpic}
+
+\newcommand*{\defeq}{\stackrel{\text{def}}{=}}
+
+\begin{document}
+\title{Rotational Effects on Gaseous Ion Transport}
+\author{Larry A. Viehland and Emerson Ducasse}
+    \affiliation{Department of Chemistry, Chatham University, Pittsburgh, PA 15232 USA}
+\author{Matthew M. Hoffman and Jamiyanaa Dashdorj}
+    \affiliation{Department of Physics, Chatham University, Pittsburgh, PA 15232 USA}
+\author{Michelle Doyle and Aaron Trout}
+    \affiliation{Department of Mathematics, Chatham University, Pittsburgh, PA 15232 USA}
+\date{\today}
+\begin{abstract}
+    \textcolor{red}{Abstract to be added}
+\end{abstract}
+\maketitle
+\section{Introduction}
+It is now well established (Secs. 6.22-24 of \cite{Viehland2018}) that accurate measurements of the transport properties of atomic ions in atomic gases can serve as sensitive probes of the interaction potentials between colliding particles over wide ranges of the internuclear axis.  The reason for this is that it known how to calculate gaseous ion transport properties from such potentials with high accuracy, using either classical or quantum-mechanical methods and the Boltzmann equation. Many calculations have now shown that the more time-consuming quantum calculations are unnecessary, given the present and foreseeable accuracy of the measured transport coefficients.
+
+The situation is not nearly as good for systems where either or both of the particles are polyatomic. The first difficulty is that the Boltzmann equation no longer applies and a more elaborate kinetic theory should be used.  Conceptually, the easiest such theory involves the Waldman-Uhlenbeck-de Boer (WUB) equation \cite{WangChang1964}. The assumption made here is that each internal state of an ion or neutral can treated as a different chemical species. The state-specific, semiclassical cross sections for the collisions are summed over final states and averaged over initial states. Unfortunately, there is no way this theory can incorporate internal states that are degenerate, as they are for rotational degrees of freedom.  Finally the WUB expressions are so complicated that there still are few ab initio calculations of them, more than 60 years after they were developed.
+
+For quantum work with rotating molecules, the WUB equation should be replaced by the Waldmann-Snider equation \cite{Waldmann1957,Waldmann1958,Snider1960} or the "off-the-energy-shell" kinetic equation due to Tip \cite{Tip1971a,Tip1971b}.  Unfortunately, evaluating the matrix elements of the collision operators that arise in these theories is even more daunting than for the WUB theory and to date has not been reported.
+
+Turning to classical mechanics, Curtiss presented a kinetic-theory for non-vibrating (i.e., rigid rotor) molecules in their ground electronic states in 1981 \cite{Curtiss1981}.  This theory was generalized later \cite{Curtiss1992} to any type of polyatomic molecule.  It was specialized \cite{Viehland1986} to gaseous ion transport and made computationally feasible in 1989 \cite{Viehland1989} with the use of a classical-trajectory program \cite{Dickinson1985a,Dickinson1985b,Dickinson1986} for calculating the transport cross sections. Applications were made to Li$^+$ in CO \cite{Viehland1994} and in N$_2$ \cite{Viehland1994,Viehland1995}. An improved theory for diatomic ions in atomic gases was presented by Viehland and Dickinson in 1995 \cite{Viehland1995} and applied to NO$^+$ in He \cite{Viehland1996}. Based upon a comparison of the calculated and experimental transport coefficients, the potential energy surfaces used for these systems were judged to be reasonable, given the then-current state of computational chemistry. However, converged transport coefficients were determined over only a small range of the ratio of the electrostatic field to the gas number density, $E/N$, and of the gas room temperature, $T$.  More troubling is that the calculations took essentially a year of (desktop) computer time for each system, and even then were not highly converged.
+
+The only way forward appears to be to find an approximate way to compute the transport coefficients for systems containing polyatomic molecules.  The first reasonable method was introduced in 1961 \cite{monchick1961}. The physical reasoning behind this Monchick-Mason Approximation (MMA) is three fold.  First, inelastic collisions have little effect on the trajectories of the particles. Second, the scattering angle in a collision is determined primarily by the forces between the particles when they are at the distance of closest approach. Third, the colliding particles spend so little time at the distance of closest approach that the orientation varies little during this portion of the collision; hence, one may as well assume that throughout the collision the particles are always at the relative orientation present when they are at the distance of closest approach.
+
+Based on the physical reasoning above, the essential features of the MMA are that molecules are treated as classical rigid rotors, the relative orientations between the colliding particles are fixed during the entire collision, the transport cross sections for each orientation are computed as if the collisions are between two atoms, and the values at the various orientations are averaged. More details are given in \cite{monchick1961} and in Sec. 8.10 of \cite{Viehland2018}.  A simple orientation average was shown to be accurate when the neutral is atomic, and a more complicated average was developed 
+\cite{Viehland2012, Gharibi2013, Viehland2014} for cases in which the neutral species is polyatomic.  When the latter averaging method is used, the modified MMA is said to be beyond the MMA (BMM).
+
+In a recent paper \cite{skullerud2021}, we calculated the transport properties of NO$^+$($^1$$\Sigma$$^+$) ions in each of the rare gases using the MMA and ab initio potentials \cite{orek2016}.  The classical and quantum-mechanical results demonstrated that rotation has an effect on the zero-field mobility as a function of $T$, or on the mobility at fixed $T$ as a function of $E/N$. This effect was small, but larger than the typical experimental error bars on transport coefficients.
+
+The purpose of this paper is to introduce a more accurate (but still approximate) way to take rotation of the diatom into account when computing the transport properties of diatomic ions as they move in trace amounts (under the influence of an external electrostatic field) through a dilute, atomic gas.  The discussion above suggest that this can only be accomplished by reconsidering what happens when the colliding particles are near the distance of closest approach. To this end, we will separately treat the dynamics of a collision in Sec. II and the energetics in Sec. III. Applications of this new approximation method will be made in Sec. IV and compared to experimental results. Conclusions will be given in Sec. V.
+
+\section{Geometry and Dynamics}
+Collisions in gaseous ion transport experiments are instantaneous compared to the time between collisions. This means that the effects of external electric and magnetic fields can be ignored during a collision. The analysis in this section and the next will therefore be the same if the particles are both neutral, although we shall refer to the diatom as an ion. Quantities associated with the atomic neutral will be given the subscript $j$ while those for the diatomic ion will have the subscript $i$.
+
+The translational motions of the colliding particles will be treated in this paper using classical mechanics. However, we must be careful when treating the other degrees of freedom, lest the whole concept of intermolecular forces become nebulous \cite{hornig1956}. Thus, we assume that
+\begin{enumerate}
+    \item The atom is in its ground electronic state, the ion is in some particular electronic state, and there are no transitions between electronic states during the collision.
+    \item The ion is in its ground vibrational state, the collisions are not energetic enough to cause vibrational excitation, and we can ignore vibrational motion and so treat the ion as a rigid rotor. To the best of our knowledge, all ab initio potentials presently available for atom-diatomic ion systems make this same assumption.
+\end{enumerate}
+
+What we need to do is make small corrections to the formulas that are valid for atomic systems (Eqs. 1.21-23 of \cite{Viehland2018}).  This will be accomplished by considering FIG. 1, which shows an ion-neutral collision in the center-of-mass (COM) reference frame for the entire system, near the time of closest approach between the ion COM and the nucleus of the neutral atom.
+
+Let $\mathbf{r}_j(t)$ denote the position vector of the neutral atom at time $t$, where $t=0$ is chosen to be long before the collision begins, and let $m_j$ and $\mathbf{v}_j(t) = d\mathbf{r}_j / dt$ be the atom's mass and velocity, respectively. The corresponding quantities for the individual atoms in the diatomic ion are given by replacing the subscript $j$ with either $1$ or $2$, while quantities associated with the entire ion are given the subscript $i$. For example, the COM of the diatomic ion is located at position $\mathbf{r_i}(t) = [m_1 \mathbf{r_1}(t) + m_2 \mathbf{r_2}(t)]/(m_1+m_2)$ and the ion's reduced mass is given by $\mu_i = m_1m_2 / (m_1 + m_2)$. The separation vector and relative velocity between the ion COM and neutral are given by $\mathbf{r}(t) = \textbf{r}_j(t)-\textbf{r}_i(t)$ and $\mathbf{v}(t)= d\mkern1mu\mathbf{r}/dt$ respectively, and we denote the separation distance by $r(t)= |\mathbf{r}(t)|$. The separation vector between the two atoms in the ion is given by $\boldsymbol{\ell}(t)=\mathbf{r_2}(t) - \mathbf{r_1}(t)$ and the inter-atomic length is denoted by $\ell = |\boldsymbol{\ell}(t)|$.
+
+The {\em collision plane}, $K^*$, is defined as the plane passing through the system COM and containing both $\mathbf{v}_i(0)$ and $\mathbf{v}_i(\infty)$. Note that $K^*$ does not change with time. We define the $z$ axis as being along the ion's angular momentum, so the absence of any $z$ forces on the atoms of the ion during the collision means that the rotational energy of the ion is constant. The $x$ axis lies along $\mathbf{v}_i(0)$ and the $y$ axis is in plane $K^*$ but perpendicular to the $x$ and $z$ axes.
+
+The {\em interaction plane} at time $t$, denoted $K(t)$, is defined as the plane containing all three atoms in the system. Note that if the ion consisted of only one atom, $K(t)$ and $K^*$ would be the same at all times.  The {\em impact parameter}, $b$, is defined as the shortest distance between the ion's COM and the neutral atom if there were no collision.
+
+Our analysis of the collision will refer to several angles shown in FIG. 1. The first is the {\em interaction angle}, $\phi(t)$, given by
+\begin{equation}
+    \phi(t) = \cos^{-1} \mkern-2mu \big(\mkern1mu \mathbf{\widehat{r}}(t) \cdot \widehat{\boldsymbol{\ell}}(t)\big).
+    \label{eqn:phi_def}
+\end{equation}
+The second is the {\em collision angle}, $\theta(t)$, given by
+\begin{equation}
+    \theta(t) = \cos^{-1} \big( \mathbf{\widehat{r}}(t) \cdot \mathbf{\mathbf{\widehat{r}}(0)}\big).
+    \label{eqn:theta_def}
+\end{equation}
+Third, the {\em scattering angle} is
+\begin{equation}
+\chi = \pi - \theta(\infty) = \pi -  \cos^{-1} \mkern-2mu \big(\,
+     \mathbf{\widehat{r}}(\infty) \cdot \mathbf{\widehat{r}(0)}\big).
+    \label{eqn:chi_def}
+\end{equation}
+
+When a collision begins, $r(0)$ is so large that there are no forces between the ion and atom. It is also so much larger than $\omega$, the rate of rotation of the ion, that, from the position of the colliding atom, the ion can be viewed as a point particle. 
+
+\begin{figure}[t]
+    \centering
+%    \includegraphics[width=\columnwidth]{the_planes.pdf}
+    \includegraphics[trim={0 11.5cm 19.9cm 0},clip, width=\columnwidth]{collision_3d.pdf}
+    \put(-370pt,45pt){$K^*$}
+    \put(-475pt,44pt){$\mathbf{\widehat{x}}$}
+    \put(-486pt,72pt){$\mathbf{\hat{y}}$}
+    \put(-497pt,80pt){$\mathbf{\hat{z}}$}
+    \put(-444pt,255pt){$K(t)$}
+    \put(-164pt,165pt){$\mathbf{r}(t)$}
+    \put(-224pt,181pt){$\mathbf{r}_{m}$}
+    \put(-88pt,152pt){$b$}
+    \put(-405,140pt){$\phi(t)$}
+    \put(-260pt,126pt){$\theta_{\mkern-1mu m}$}
+    \put(-297pt,122pt){$\phi_{\mkern-1mu m}$}
+    \put(-348pt,126pt){$\theta(t)$}
+    \put(-395pt,107pt){$\textbf{v}_{\mkern-2mu i}\mkern-1mu(\mkern-1mu t \mkern-1mu)$}
+    \put(-420pt,162pt){$\widehat{\boldsymbol{\ell}}$}
+    \put(-462pt,141pt){$\mathbf{L}$}
+    \put(-427pt,110pt){$\textbf{r}_{\mkern-2mu i}\mkern-2mu(\mkern-1mu t \mkern-1mu)$}
+    \put(-65pt,205pt){$\textbf{r}_{\mkern-2mu j}\mkern-1mu(\mkern-1mu t \mkern-1mu)$}
+    \caption{The geometry of a collision between a rotating diatomic molecule (green and peach disks) and an atom (yellow disk) in a space-fixed coordinate system. The collision plane (gray) and a particular interaction plane (blue) are shaded. Also shown are the center-of-mass for the diatom (gray dot) and the overall system (black dot), the orientation vector for the diatom (purple arrow), the angular momentum vector for the diatom (red arrow), and the velocity vector of the ion center-of-mass (orange arrow). The vectors $\textbf{r}_i(t)$ and $\textbf{v}_i(t)$ denote the position and velocity, respectively, of the ion center-of-mass, and the vector $\textbf{r}_j(t)$ is the position of the atom.}
+    \label{fig:diatom_atom_collision}
+\end{figure}
+
+To more easily analyze a collision between an atom and a diatomic ion, we refer to FIG. 2. Note that $\textbf{r}(t)$ lies in both $K^*$ and $K(t)$ for all $t$ and that, because the potential energy vanishes so rapidly with distance, we may treat the entire collision as if it occurs very near the distance of closest approach, $r_m$.
+
+\begin{figure}[t]
+    \centering
+    \includegraphics[trim={0 9.7cm 20.6cm 0},clip, width=0.95\textwidth]{collision_plane.pdf}
+    \put(-460pt,310pt){$K^*$}
+    \put(-380pt,295pt){$\chi$}
+    \put(-359pt,180pt){$\mathbf{r}(t)$}
+    \put(-401pt,141pt){$\theta(t)$}
+    \put(-210pt,142pt){$\theta_{m}$}
+    \put(-217pt,195pt){$\mathbf{r}_{m}$}
+    \put(-170pt,225pt){$\mathbf{\widehat{x}}$}
+    \put(-199pt,255pt){$\mathbf{\hat{y}}$}
+    \put(-25pt,205pt){$b$}
+    \caption{Motion of the diatom COM (gray dot) and atom (yellow disk) within the collision plane $K^*$ during the collision.}
+\label{fig:TwoParticleCollision}
+\end {figure}
+
+The force $\textbf{F}_j$ on the neutral atom comes entirely from its interaction with the ion. This force changes the atom's position in $K^*$ according to Newton's laws, so
+\begin{equation}
+    \textbf{F}_j = m_j \frac{d\textbf{r}_j^2}{dt^2}.
+    \label{ForceOnAtom}
+\end{equation}
+Although it remains in $K^*$ during a collision, the direction and magnitude of $\textbf{F}_j$ varies with $\textbf{r}$, $\theta$ and $\phi$.
+
+Newton's third law means that -$\textbf{F}_j$ is the total force exerted by the atom upon the diatomic ion.  Therefore, the motion of its COM must be governed by the equation
+\begin{equation}
+    - \textbf{F}_j = \textbf{F}_i = \mu_i\frac{d^2\textbf{r}_i}{dt^2},
+    \label{ForceOnIon}
+\end{equation}
+where $\mu_i$ is the reduced mass of the ion. If Eq. (\ref{ForceOnAtom}) is multiplied by $\mu_i$, Eq. (\ref{ForceOnIon}) is multiplied by $m_j$ and the equations are then subtracted, we obtain
+\begin{equation}
+    \frac{\textbf{F}_i}{\mu_{ij}} = \frac{d^2\mathbf{r}}{dt^2}.
+    \label{EquationOfMotion}
+\end{equation}
+
+We now form a cross-product of each side of Eq. (\ref{EquationOfMotion}) with $\mathbf{r}$ to obtain
+\begin{equation}
+    \mathbf{r} \times \frac{\textbf{F}_i}{\mu_{ij}} = \mathbf{r} \times \frac{d^2 \mathbf{r}}{dt^2}.
+    \label{CrossProduct1}
+\end{equation}
+The left-hand side vanishes when both colliding particles are atoms because the intermolecular force must lie along the line joining the atom and the COM of the ion, and the cross-product of collinear vectors is zero. However, this may not be the case when one of the colliding particles is diatomic. In this paper, we assume that the intermolecular force is exactly parallel to $\mathbf{r}$, so that
+\begin{equation}
+    \mathbf{r} \times \frac{d^2 \mathbf{r}}{dt^2} = 0.
+    \label{CrossProduct2}
+\end{equation}
+The validity of this assumption is supported by the good results obtained using the MMA \cite{skullerud2021}.
+
+Using the product rule for the derivative of a cross-product allows Eq. (\ref{CrossProduct2}) to be rewritten as
+\begin{equation}
+    \frac{d}{dt} \left[ \mathbf{r} \times \frac{d \mathbf{r}}{dt} \right] = 0.
+    \label{CrossProduct4}
+\end{equation}
+Integrating Eq. \ref{CrossProduct4} with respect to time shows that the vector $\mathbf{r} \times \frac{d \mathbf{r}}{dt}$ is constant. This means that the neutral atom and the diatomic ion's COM always lie in the fixed plane normal to $\mathbf{r} \times \frac{d \mathbf{r}}{dt}$, i.e. the collision plane $K$ shown in FIG. \ref{fig:TwoParticleCollision} and defined earlier.
+
+\section{Collision Analysis}
+Because the force between the ion and the neutral is assumed to be collinear with $\mathbf{r}$, the total energy of the ion-neutral system can be shown from FIG. 2 to be
+ \begin{equation}
+    \epsilon = \frac{1}{2}\mu_{ij}\left(\frac{dr}{dt}\right)^2 + \frac{1}{2}\mu_{ij}r^2\left(\frac{d\theta}{dt}\right)^2 + \frac{1}{2} \mu_i \ell^2 \omega^2 + V(r, \phi).
+    \label{Total Energy}
+\end{equation}
+ where $\ell$ is the fixed distance between the atoms composing the diatomic ion and $\omega$ is the rate of rotation of the ion. The first term in Eq. (\ref{Total Energy}) is the kinetic energy of the motion of the atom and the diatom towards/away from each other, the second is the rotational energy of the atom and the diatom about the system's COM, and the third is the rotational energy of the diatom about the its own COM. Note that $V$, the interaction potential energy, depends only on $r$ and $\phi$.
+
+We now consider the pre-collision total energy, $\epsilon_{0}$. Since $V(r, \phi)\rightarrow 0$ and $r^2\mkern-3mu\left(\frac{d\theta}{dt}\right)^{\mkern-3mu 2} \rightarrow 0$ as $r\rightarrow - \infty $ (or $t\rightarrow 0$), we obtain
+\begin{equation}
+    \epsilon_{0} = \frac{1}{2}\mu_{ij}g^2 + \frac{1}{2} \mu_{i} \ell^2 \omega^2
+    \label{eqn:pre_collision_energy}
+\end{equation}
+where $g$ is the pre-collision relative speed of the atom and the diatom COM.  Note that the pre-collision angular velocity of the diatomic ion is the same as $\omega$ because the ion-neutral force is entirely between the ion and neutral.
+
+By conservation of energy, $\epsilon$ must equal $\epsilon_{0}$ at all times. Thus,
+\begin{equation}
+   \frac{1}{2}\mu_{ij}g^2  = \frac{1}{2}\mu_{ij}\mkern-3mu\left(\frac{dr}{dt}\right)^{\mkern-3mu 2} \mkern-3mu + \frac{1}{2}\mu_{ij}r^2\mkern-3mu\left(\frac{d\theta}{dt}\right)^{\mkern-3mu 2} \mkern-3mu + V(r, \phi).
+   \label{eqn:conservation_energy_final}
+\end{equation}
+Note the left side of Eq. (\ref{eqn:conservation_energy_final}) is a constant determined by the pre-collision parameters.
+
+By conservation of angular momentum, we know that 
+\begin{equation}
+    \mu_{ij}bg \mkern2mu \mathbf{\widehat{K}}^* + \mathbf{L}_{0} =\mu_{ij}r^2\frac{d\theta}{dt}\mathbf{\widehat{K}}^* + \mathbf{L}
+    \label{eqn:conservation_vector_angular_momentum}
+\end{equation}
+where $\mathbf{L}_{0}$ denotes the pre-collision value of $\mathbf{L}$, and $\mathbf{\widehat{K}}^*$ is a unit vector normal to the collision plane $K^*$. As in the MMA, we assume that changes in $\mathbf{L}$ during the collision are insignificant, i.e. $\mathbf{L}(t) = \mathbf{L}_0$ for all $t$. 
+This is because the atom and the diatom are always sufficiently far apart that there are no torques on the diatom.
+In this case, Eq. \ref{eqn:conservation_vector_angular_momentum} implies that
+\begin{equation}
+   \frac{d\theta}{dt}= \frac{bg}{r^2},
+   \label{eqn:Conservation of Angula Momentum}
+\end{equation}
+which allows us to rewrite Eq. \ref{eqn:conservation_energy_final} as
+\begin{equation}
+    \frac{1}{2}\mu_{ij}g^2 = \frac{1}{2}\mu_{ij}\left(\frac{dr}{dt}\right)^2 + \frac{1}{2}\mu_{ij}\frac{b^2g^2}{r^2} + V(r, \phi).
+\end{equation}
+Thus,
+\begin{equation}
+    \frac{dr}{dt} = \pm g\left[ 1 - \frac{b^2}{r^2} - \frac{V\big(r, \phi\big)}{\frac{1}{2}\mu_{ij} g^2}\right]^{1/2}.
+    \label{eqn:dRdt_of_R}
+\end{equation}
+where the sign indicates whether the separation between the ion and neutral is decreasing or increasing during that portion of the collision.
+
+Now we are in position to determine the scattering angle. By a change of variables, we have
+\begin{equation}
+   \chi=\pi-\int_0^{\theta( \infty)} d\theta=\pi-\int_{0}^{\infty} \frac{d \theta }{dt} dt.
+\end{equation}
+There must be at least one positive real root to the function on the right-hand side of Eq. \ref{eqn:dRdt_of_R}, since $(b/r)^2 \rightarrow 0$ as both $t\rightarrow 0$ and $t\rightarrow \infty$. This root, denoted $t_m$, must be the time corresponding to the point of closest approach during the collision. We can then write
+\begin{equation}
+    \chi = \pi - \left[ \int_{0}^{t_m}\!\frac{d \theta }{dt}dt \ + \  \int_{t_m}^{\infty}\!\frac{d \theta }{dt}dt\right].
+    \label{eqn:chi_dtheta}
+\end{equation}
+
+We wish to write the integrals in Eq. \ref{eqn:chi_dtheta} as a single integral from $r=r_m$ to $r=\infty$. To do this, we define the functions $r_{\text{in}}(t)$ and $r_{\text{out}}(t)$ to be $r(t)$ restricted to the time intervals $[0, t_m]$ and  $[t_m, \infty)$ respectively. Changing variables in Eq. \ref{eqn:chi_dtheta} using $dr = \frac{dr}{dt}dt$ then gives
+\begin{equation}
+    \chi = \pi - \left[ \int_{\infty}^{r_m}\!\frac{d \theta }{dt}\left(\mkern-2mu \frac{dr_{\text{in}}}{dt}\mkern-2mu \right)^{\!\!-1}\mkern-4mu dr_{\text{in}} \ + \  \int_{r_m}^{\infty}\!\frac{d \theta }{dt}\left(\mkern-2mu \frac{dr_{\text{out}}}{dt}\mkern-2mu \right)^{\!\!-1}\mkern-4mu dr_{\text{out}}\right].
+\end{equation}
+Making the substitutions given by Eq. \ref{eqn:dRdt_of_R} and Eq. \ref{eqn:Conservation of Angula Momentum} gives
+\begin{equation}
+    \chi = \pi - \left[ -\int_{\infty}^{r_m} \frac{b}{r^2}\frac{dr}{\sqrt{1 \mkern1mu - \mkern1mu  b^2 \mkern-2mu/\mkern-2mu r^2 \mkern1mu - \mkern1mu V_{\text{in}}(r)/(\frac{1}{2}\mu_{ij} g^2)}} \ + \ \int_{r_m}^{\infty} \frac{b}{r^2}\frac{dr}{\sqrt{1 \mkern1mu - \mkern1mu  b^2 \mkern-2mu/\mkern-2mu r^2 \mkern1mu - \mkern1mu V_{\text{out}}(r)/(\frac{1}{2}\mu_{ij} g^2)}} \right]
+\end{equation}
+where $V_{\text{in}}(r) = V(r, \phi(r_{\text{in}}^{-1}(r))$ and $V_{\text{out}}(r) = V(r, \phi(r_{\text{out}}^{-1}(r))$ are the potential energies as functions of $r$, along the incoming and outgoing paths respectively. Here we use $r_{\text{in}}^{-1}$ and $r_{\text{out}}^{-1}$ to denote the inverse functions of $r_{\text{in}}$ and $r_{\text{out}}$. These inverse functions return the time $t$ corresponding to    a given separation distance $r$. Finally, reversing the limits of integration in the first integral above gives
+\begin{equation}
+    \chi = \pi - b \mathlarger{\int}_{r_m}^{\infty} \bigg[ \frac{1}{\sqrt{1 \mkern1mu - \mkern1mu  b^2 \mkern-2mu/\mkern-2mu r^2 \mkern1mu - \mkern1mu V_{\text{in}}(r)/(\frac{1}{2}\mu_{ij} g^2})} + \frac{1}{\sqrt{1 \mkern1mu - \mkern1mu  b^2 \mkern-2mu/\mkern-2mu r^2 \mkern1mu - \mkern1mu V_{\text{out}}(r)/(\frac{1}{2}\mu_{ij} g^2})} \bigg]\frac{dr}{r^2}.
+    \label{eqn:final_chi}
+\end{equation}
+
+Note that the dependence of $\chi$ on the diatom's angular momentum, $\mathbf{L}$, and its orientation at the point of closest approach, $\widehat{\boldsymbol{\ell}}_m$, arises because these are needed to determine $r_{\text{in}}(t)$ and $r_{\text{out}}(t)$.
+Note that even in the case of atom-atom collisions, despite many years of trying, no analytical expression for $\chi$ is known and one must resort to numerical methods that are equivalent to classical trajectory calculations. Such calculations are too slow \cite{skullerud2021} for the present purposes, which is one reason why the MMA was developed.
+
+\section{Some approximations. (TO DO: Better title?)}
+
+{\color{red} TO DO: put in transition sentence.} We wish to approximate the change $\Delta t$ near $t_m$ that produces a given change $\Delta r$ in $R$. We start with the second order approximation
+\begin{equation}
+    \mathbf{r}(t_m + \Delta t) \approx \mathbf{r}_m + \mathbf{v}_m \Delta t + \frac{1}{2}\mathbf{a}_m (\Delta t)^2.
+    \label{eqn:R_of_t_approx}
+\end{equation}
+Since the force between the atom and diatom is always in the direction of $\mathbf{r}(t)$ and its magnitude is $-\frac{\partial V}{\partial r}$ we obtain
+\begin{equation}
+    \mu_{ij} \mathbf{a}_m = - \frac{\mathbf{r}_m}{r_m}\frac{\partial V}{\partial r}\bigg|_{r=r_m}.
+    \label{eqn:acceleration_formula}
+\end{equation}
+Combining together Eq. \ref{eqn:R_of_t_approx} and Eq. \ref{eqn:acceleration_formula} gives
+\begin{equation}
+    \mathbf{r}(t_m + \Delta t) \approx \alpha \mathbf{r}_m + \mathbf{v}_m \Delta t.
+\end{equation}
+where
+\begin{equation}
+    \alpha \equiv 1 - \frac{(\Delta t)^2}{2\mu_{ij} r_m}\frac{\partial V}{\partial r}\bigg|_{r=r_m}.
+\end{equation}
+We can now use this approximation to derive an approximate relation between $\Delta r$ and $\Delta t$ near $t=t_m$.
+\begin{align*}
+    \Delta r & = |\mathbf{r}(t_m + \Delta t)| - |\mathbf{r}_m| \\
+        & \approx |\alpha \mathbf{r}_m + \mathbf{v}_m \Delta t| - r_m \\
+        &= \sqrt{\alpha^2 \mathbf{r}_m \mkern-3mu\cdot \mathbf{r}_m + 2\alpha \mathbf{r}_m\mkern-3mu\cdot \mathbf{v}_m \Delta t + \mathbf{v}_m \cdot \mathbf{v}_m (\Delta t)^2}-r_m \\
+        &= \sqrt{\alpha^2 r_m^2 + 2 \alpha \mathbf{r}_m\mkern-3mu\cdot \mathbf{v}_m \Delta t + v_m^2 (\Delta t)^2} - r_m.
+\end{align*}
+Since $\mathbf{v}_m$ and $\mathbf{r}_m$ are orthogonal, we obtain
+\begin{equation}
+    \Delta r = \sqrt{\alpha^2 r_m^2 + v_m^2 (\Delta t)^2} - r_m.
+\end{equation}
+Solving this equation for $\Delta t$ gives
+\begin{equation}
+    \Delta t = \bigg[\frac{\mu_{ij}r_m}{2}\left( \frac{\partial V}{\partial r}\right)^{\mkern-2mu -1}\mkern-2mu \Big(\sqrt{B^2+4C}-B\Big)
+    \bigg]^{\frac{1}{2}}
+    \label{eqn:delta_t_from_delta_r}
+\end{equation}
+where
+\begin{equation}
+    B = \frac{4\mu_{ij}v_m^2}{r_m}\left( \frac{\partial V}{\partial r}\right)^{\mkern-2mu -1}-4 \qquad\mbox{and}\qquad C = \frac{4\Delta r}{r_m^2}\big(4r_m + \Delta r\big).
+\end{equation}
+% \begin{equation}
+%    \Delta t = \sqrt{2} \left( \frac{\partial V}{\partial r} \right)^{-1} \sqrt{\frac{\partial V}{\partial r} -v_m^2+\sqrt{\left( -\frac{\partial V}{\partial r}+v_m^2\right)^2
+%    +\left( \frac{\partial V}{\partial r}\right)^2
+%    (\Delta r^2 + 2r_m\Delta r)}}
+%    \label{eqn:delta_t_from_delta_r}
+%\end{equation}
+
+We will be interested in the time derivative of $\phi$ at the point of closest approach. Moving the cosine to the other side in Eq. \ref{eqn:phi_def}, taking the time derivative, and then using $\mathbf{\widehat{r}} = \mathbf{r}/R$ shows that
+\begin{equation}
+    \frac{d\phi}{dt} = \frac{1}{r \sin \phi}\left[ \frac{d\mathbf{r}}{dt}\mkern-2mu\cdot\mkern-2mu\widehat{\boldsymbol{\ell}} \,+\, \mathbf{r} \mkern-2mu \cdot \mkern-2mu \frac{d\widehat{\boldsymbol{\ell}}}{dt} \right].
+\end{equation}
+(TO DO: check on $w$ vs $\ell$.) Since $\mathbf{L}$ is the angular momentum vector for the diatom, we know that
+\begin{equation}
+    \frac{d\widehat{\boldsymbol{\ell}}}{dt} = \frac{\widehat{\boldsymbol{\ell}} \times \mathbf{L}}{\mu_i w^2}.
+\end{equation}
+At the point of closest approach, i.e. $t=t_m$, we obtain
+\begin{equation}
+    \frac{d\phi}{dt}\bigg|_{t=t_m} = \frac{1}{r_m \sin \phi_m}\bigg[ \mathbf{v}_m \mkern-2mu \cdot \mkern-2mu \widehat{\boldsymbol{\ell}}_m \,+\, \frac{1}{\mu_iw^2}\mathbf{r}_m\mkern-2mu \cdot \mkern-2mu (\widehat{\boldsymbol{\ell}}_m \times \mathbf{L}) \bigg]
+    \label{eqn:dphi_dt_final}
+\end{equation}
+where $\mathbf{v}_m = \mathbf{v}_i(t_m)$ is the velocity of the ion at the point of closest approach.
+
+Now we would like to approximate $\phi(t_m + \Delta t)$. To first order near $t=t_m$, we have
+\begin{equation}
+    \Delta \phi \approx \frac{d\phi}{dt}\bigg|_{t=t_m}\Delta t.
+    \label{eqn:delta_phi}
+\end{equation}
+% Using Eq. \ref{eqn:dphi_dt_final} and Eq. \ref{eqn:delta_t_from_delta_r} gives
+% \begin{equation}
+%     \Delta \phi \approx \frac{\mathbf{v}_m \mkern-2mu \cdot \mkern-2mu \widehat{\boldsymbol{\ell}}_m \,+\, \mathbf{r}_m\mkern-2mu \cdot \mkern-2mu (\mathbf{L} \times \widehat{\boldsymbol{\ell}}_m)}{r_m \sin \phi_m}\sqrt{2} \left( \frac{\partial V}{\partial r} \right)^{-1} \sqrt{\frac{\partial V}{\partial r} -v_m^2+\sqrt{\left( -\frac{\partial V}{\partial r}+v_m^2\right)^2
+%     +\left( \frac{\partial V}{\partial r}\right)^2
+%     (\Delta r^2 + 2r_m\Delta r)}}
+%     \label{eqn:new_phi}
+% \end{equation}
+Next we will form the approximate potential
+\begin{equation}
+    \widetilde{V}(r) = \frac{1}{3}\Big[ V\big(r+\Delta r, \phi_m - \Delta \phi \big) + V\big(r, \phi_m\big) + V\big(r+\Delta r, \phi_m + \Delta \phi\big)\Big].
+    \label{eqn:v0_tilde}
+\end{equation}
+% for the incoming portion of the trajectory, and
+% \begin{equation}
+%     \widetilde{V}_1(r) = \frac{1}{2}\Big[ V\big(r+\Delta r, \phi(t_m+\Delta t)\big) + V(r, \phi_m)\Big]
+%     \label{eqn:v1_tilde}
+% \end{equation}
+% for the outgoing portion.
+Finally, using the potential $\widetilde{V}$ for both the incoming and outgoing integrals in Eq. \ref{eqn:final_chi} gives
+\begin{equation}
+    \chi(\epsilon, b, \mathbf{L}, \widehat{\boldsymbol{\ell}}_m) \approx \pi - 2b \mathlarger{\int}_{r_m}^{\infty} \frac{dr}{r^2\sqrt{1 \mkern1mu - \mkern1mu  b^2 \mkern-2mu/\mkern-2mu r^2 \mkern1mu - \mkern1mu \widetilde{V}(r)/\epsilon}}.
+    \label{eqn:final_approx_chi}
+\end{equation}
+
+\section{Step-by-step procedure}
+Cross sections in gaseous ion transport experiments are averages over many collisions. This means that we must compute a weighted average over many initial values of $b$, $\phi$, the total collision energy, and the angular momentum of the diatom. In this section, we outline the detailed procedure for calculating these cross sections.
+
+We start by noting that since the left-hand side of Eq. \ref{eqn:final_approx_chi} is independent of any choice of coordinates, and $\mathbf{v}_m$ and $\mathbf{r}_m$ are orthogonal, we may choose a coordinate system where
+\begin{equation}
+    \mathbf{v}_m = (v_m,0,0)\hspace{0.5in}\mathbf{r}_m = (0,r_m,0).
+\end{equation}
+We will describe the angular momentum vector in spherical coordinates using angles $\sigma$ and $\tau$.
+\begin{align}
+    \mathbf{L} &= (L\sin \sigma \cos \tau, L\sin \sigma \sin \tau, L\cos \tau) \nonumber \\
+    &\equiv (L_x, L_y, L_z)
+\end{align}
+Finally, we describe the orientation vector $\widehat{\boldsymbol{\ell}}$ (which must be orthogonal to $\mathbf{L}$) using the angle $\lambda$ as [TO DO: Give each vector in the linear combination below a separate symbol and simplify this.]
+\begin{equation}
+    \widehat{\boldsymbol{\ell}}_m = \mkern-2mu \cos \lambda \bigg( \frac{-L_y}{C}, \frac{L_x}{C},0
+    \bigg) \mkern2mu + \mkern2mu \mkern-2mu \sin \lambda \bigg(
+    \frac{L_xL_z}{D},
+    \frac{L_yL_z}{D},
+    \frac{-L_y^2-L_x^2}{D}
+    \bigg).
+    \label{eqn:w_m_in_coords}
+\end{equation}
+where $C = \sqrt{L_y^2+L_x^2}$ and $D = \sqrt{L_x^2L_z^2+L_y^2L_z^2+(L_y^2+L_x^2)^2}$. Given the vectors $\widehat{\boldsymbol{\ell}}_m$ and $\mathbf{r}_m$ we can compute $\phi_m$ using Eq. \ref{eqn:phi_def}. 
+
+\subsubsection{Cross Sections} Ultimately, we want to compute the cross sections
+\begin{equation}
+    \overline{Q}^{(\ell)}(\epsilon) = 2\pi C_\ell  \int_{0}^{2\pi} \!d\lambda \int_{0}^{2\pi} \!d\tau \int_{0}^\pi \sin \sigma \, d\sigma \int_{0}^\infty b\, db \big[1 - \cos^{\ell}\chi(\epsilon, b, \mathbf{L}, \widehat{\boldsymbol{\ell}}_m)\big]
+    \label{eqn:cross_section_integral}
+\end{equation}
+where
+\begin{equation}
+    C_\ell = \left[ 1 + \frac{1 + (-1)^\ell}{2 (\ell + 1)} \right]^{-1} 
+\end{equation}
+or, equivalently
+\begin{equation}
+    C_\ell = \begin{cases}
+1 & \text{if } \ell \mbox{ is odd} \\ \frac{\ell + 1}{\ell + 2} & \text{if } \ell \mbox{ is even.}
+\end{cases}
+\end{equation}
+
+Now, we perform the following steps:
+\begin{enumerate}
+    \item Choose an appropriate $\Delta r$ by inspecting the potential $V(r, \phi)$. Note that we could also choose $\Delta r$ later in the process when we have more information, e.g. we could choose $\Delta r = 0.1r_m$.
+    \item Choose angles $\lambda_1, \ldots, \lambda_n$ from $0$ to $2\pi$. Similarly, choose $\tau_1, \dots, \tau_m$ from $0$ to $2\pi$, and $\sigma_1,\ldots,\sigma_p$ from $0$ to $\pi$.
+    \item For each combination of $\lambda_i$, $\tau_j$, and $\sigma_k$:
+    \item[] \begin{enumerate}
+        \item [a)] Compute $\phi_m$ using Eq. \ref{eqn:phi_def}. Here $\mathbf{\widehat{r}}(t_m)=(0,1,0)$ and $\widehat{\boldsymbol{\ell}}(t_m)$ is given by Eq. \ref{eqn:w_m_in_coords}.
+        \item [b)] Use the code in PC to compute $r_m$ for the potential $V(r, \phi_m)$.
+        \item [c)] Use conservation of energy to find $v_m$ from $V(r_m, \phi_m)$ and the given total collision energy $\epsilon$.
+        \item [d)] Compute the $\Delta t$ needed for the given $\Delta r$ using Eq. \ref{eqn:delta_t_from_delta_r}.
+        \item [e)] Compute the angle $\phi_m + \Delta \phi$ using Eq. \ref{eqn:delta_phi}.
+        \item[f)] Use the angle from the previous step to determine $\widetilde{V}$ via Eq. \ref{eqn:v0_tilde}.
+        \item [g)] Find a new $r_m$ from $\widetilde{V}$.
+        %\item [h)] Set $V=\widetilde{V}$ and perform steps 3b) through 3g). Repeat until the computed minimum $r_m$ converges. {\color{red} AARON: Do we want to do this step? It's not strictly necessary.}
+    \end{enumerate}
+    \item For each combination of $\lambda_i$, $\tau_j$, and $\sigma_k$, use Larry's code to compute the deflection angles 
+    \begin{equation}
+        \chi_{ijk}(\epsilon, b, \mathbf{L}, \widehat{\boldsymbol{\ell}}_m) \approx \pi - 2b \mathlarger{\int}_{r_m}^{\infty} \frac{dr}{r^2\sqrt{1 \mkern1mu - \mkern1mu  b^2 \mkern-2mu/\mkern-2mu r^2 \mkern1mu - \mkern1mu \widetilde{V}(r)/\epsilon}}
+        \label{eqn:chi_integral}
+    \end{equation}
+    where $r_m$ is the minimum distance corresponding to the $\widetilde{V}$ computed in Step 3).
+    \item Estimate the cross section $\overline{Q}^{(\ell)}$ given in Eq. \ref{eqn:cross_section_integral} by averaging $2\pi C_\ell b w L^2 \sin \sigma_i (1 - \cos^\ell \chi_{ijk})$ over all $i,j,k$.
+    \item Pass on the computed cross sections $\overline{Q}^{(\ell)}(\epsilon)$ to the GC program as usual.
+\end{enumerate}
+
+\section{Moved stuff...}
+Averaging over many collisions means that we must compute the average cross sections as
+\begin{equation}
+    \overline{Q}(\epsilon)=\frac{\int Q(\epsilon,\theta,\phi)\sin{\theta}{d\theta d\phi}} {\int \sin{\theta} {d\theta d\phi}},
+    \label{2D averaging with epsilon}
+\end{equation}
+where $\epsilon$ is the relative kinetic energy. The essence of the MMA is to assume that $Q(\epsilon,\theta,\phi)$ is independent of $\phi$, so we have
+\begin{equation}
+    \overline{Q}(\epsilon)=\frac{\int Q(\epsilon,\theta)\sin{\theta}{d\theta}} {\int \sin{\theta} {d\theta}}.
+    \label{2D averaging, no epsilon}
+\end{equation}
+
+\section{Notes on Orbiting}
+
+For each collision energy $\epsilon$ and choice of angles $\lambda$, $\tau$, $\sigma$ we want to do the integral in Eq. \ref{eqn:chi_integral}. To do this accurately, we need to know the combinations of energy $\epsilon$, impact parameter $b$, and separation $r$ that result in orbiting. This occurs when
+\begin{enumerate}
+    \item $\displaystyle  \frac{d^2V}{dr^2} + \frac{3}{r} \frac{dV}{dr} \geq 0$
+    \item $\displaystyle  \frac{dV}{dr} > 0$
+    \item $V_{eff}(r) = V(r) + \frac{r}{2}\frac{dV}{dr} > 0$
+\end{enumerate}
+
+Procedure:
+\begin{enumerate}
+    \item Begin at the smallest $r$ for the given table of potential energies. There should not be orbiting at this $r$.
+    \item Increase the value of $r$ until the first value $r_1$ where orbiting occurs. Save $(r_1, E_1, b_1)$.
+    \item Keep increasing $r$ until the orbiting energy is less than $E_{min}$. Make a table of many $r$ values along the way, and the corresponding $(r_k, E_k, b_k)$.
+    \item We want to turn this data into spline fits of $r$ and $b$ as functions of $E$.
+    
+    
+\end{enumerate}
+
+% Therefore, we can use Eq. \ref{eqn:dRdt_of_R} for $\frac{dr}{dt}$ to obtain
+% \begin{equation}
+%     \frac{dr}{dt} =  - g\left[ 1 - \frac{b^2}{r^2} - \frac{V(r,\phi)}{\frac{1}{2}\mu_{ij} g^2}\right]^{\frac{1}{2}}
+% \end{equation}
+% for $t\leq t_m$ and
+% \begin {equation}
+%     \frac{dr}{dt} =  g\left[ 1 - \frac{b^2}{r^2} - \frac{V(r,\phi)}{\frac{1}{2}\mu_{ij} g^2}\right]^{\frac{1}{2}}. 
+%     \label{eqn:dr_dt2}
+% \end{equation}
+% for $t \geq t_m$.  
+
+
+%(CUT SENTENCE) However, transport properties are obtained by averaging over a large number of collisions, so it is likely that the force between the ion and the neutral is still primarily collinear to $\mathbf{r}$;
+
+
+% \begin{enumerate}
+%     \item Use Mathematica to create functions for $V$ and $\frac{\partial V}{\partial \phi}$ that can be evaluated at any needed $(r_m, \phi_m)$.
+%     \item For each $r_m$ we compute $\frac{\partial V}{\partial \phi}$ and use this to creat code that computes the following potential function \[ \widetilde{V}(R) = V(r, \phi_m) + \big( \phi(R) - \phi_m\big)\left.\frac{\partial V}{\partial \phi}\right|_{\phi=\phi_m}. \]
+%     \item We compute $\phi(R) \approx \phi_m + \mbox{RND NUM}/10$ ... from given $\phi_m$, $r_m$, $L$ and $w$.
+%     \item For a large number of angles $\phi_m \in [0, \pi]$, we use PC to compute $r_m$ for each needed impact parameter $b$ and collision energy $\epsilon$. Note that PC already does this.
+%     \item Use this $\widetilde{V}(R)$ to compute the cross-sections as before.
+% \end{enumerate}
+% \begin{align}
+%     V(r, \phi) \approx V(r, \phi_m) 
+% \end{align}
+% \begin{align}
+%     V(r, \phi) \approx V(r_m, \phi_m) + \frac{\partial V}{\partial r}\left(r - r_m\right) + \frac{\partial V}{\partial \phi}\left(\phi - \phi_m\right)
+% \end{align}
+% \begin{align}
+%     V(r, \phi(R)) &\approx V(r_m, \phi_m) + \frac{dV}{dt}\Delta t\\
+%     & \approx V(t_m) + \Delta t\left[  \frac{dV}{dR}\frac{dr}{dt} + \frac{dV}{d\phi}\frac{d\phi}{dt} \right]_{t=t_m}.
+% \end{align}
+% Near the point of closest approach, the separation $r(t)$ is a minimum and so $\frac{dr}{dt}=0$ and we obtain
+% \begin{equation}
+%     V(t_m + \Delta t) \approx V(t_m) + \Delta t\left[\frac{dV}{d\phi}\frac{d\phi}{dt} \right]_{t=t_m}.
+% \end{equation}
+% Now we can compute
+% \begin{equation}
+%     \frac{d\phi}{dt} = \ldots.
+% \end{equation}
+% Now we define a radially symmetric effective potential 
+% \begin{equation}
+%     V_{\mbox{eff}}(R) = \delta_{\scriptscriptstyle \mkern-1mu -} V(r, \Phi_{\scriptscriptstyle \mkern-1mu -}) + \delta_m V(r, \Phi_m) + \delta_{\scriptscriptstyle \mkern-1mu +} V(r, \Phi_{\scriptscriptstyle \mkern-1mu +}) 
+% \end{equation}
+% where $\Phi_m$ is the closest angle to $\phi_m$ for which $V(r, \Phi_m)$ is known, and $\Phi_{\scriptscriptstyle \mkern-1mu -}$ and $\Phi_{\scriptscriptstyle \mkern-1mu +}$ are the two other angles nearest to $\Phi_m$ for which $V$ is known. We will choose
+% \begin{equation}
+%     \epsilon_{\scriptscriptstyle \mkern-1mu -} = \ldots \qquad \epsilon_{m}=\ldots \qquad \epsilon_{\scriptscriptstyle \mkern-1mu +}=\ldots
+% \end{equation}
+
+\section{Symbol Table}
+\label{sec:symbol_table}
+\begin{center}
+\begin{tabular}{|| c || l ||} 
+ \hline
+ Symbols & Meaning \\ [0.5ex] 
+ \hline \hline
+ $\mathbf{r}_j$, $\mathbf{v}_j$, $m_j$ & position, velocity, and mass of the neutral atom  \\ \hline
+ $\mathbf{r}_i$, $\mathbf{v}_i$ & position and velocity of the diatomic ion's center of mass  \\ \hline
+ $\mathbf{r}_\alpha, \mathbf{r}_\beta$ & positions of the atoms in the diatomic ion  \\ \hline
+ $\mathbf{r}$ & vector from atom to diatom's center of mass, $\mathbf{v}_i - \mathbf{v}_j$ \\ \hline
+ $R$ & distance from atom to diatom's center of mass, $\| \mathbf{r} \|$ \\ \hline
+ $\ell$ & distance between atoms in the diatom, $\| \mathbf{r}_\alpha - \mathbf{r}_\beta \|$ \\ \hline
+ $m_\alpha, m_\beta$ & masses of the atoms in the diatomic ion \\ \hline
+ $\mu_i$ & reduced mass of the diatomic ion, $m_\alpha m_\beta / (m_\alpha + m_\beta)$ \\ \hline
+ $\mu_{ij}$ & reduced mass of the atom/diatom as a two-body system, $m_j \mu_i / (m_j + \mu_i)$ \\ \hline
+ $\mathbf{\widehat{x}}$ & direction of pre-collision velocity of ion's COM, $\frac{\mathbf{v}_i}{\| \mathbf{v}_i\|}$ as $t\rightarrow -\infty$ \\ \hline
+ $\mathbf{\hat{y}}$ & \ldots \\ \hline
+ $\mathbf{\hat{z}}$ & \ldots \\ \hline
+ $\mathbf{L}$ & \ldots \\ \hline
+ $\omega$ & \ldots \\ \hline
+\end{tabular}
+\end{center}
+
+
+% In the Cartesian coordinate system of FIG.2, the kinetic energy in plane $K$ of the system of two particles is
+% \begin{equation}
+%     E_K_f=\frac{1}{2}m_i\left[\left(\frac{dx_i}{dt}\right)^2+\left(\frac{dy_i}{dt}\right)^2\right]+\frac{1}{2}\mu_j \left[\left(\frac{dx_j}{dt}\right)^2+\left(\frac{dy_j}{dt}\right)^2\right]+\frac{1}{2} \mu_{ij}r^2 \left(\frac{d\theta}{dt}\right)^2
+%     \label{TotalEnergy}
+% \end{equation}
+% where $x_i$, $y_i$, $x_j$ and $y_j$ are the Cartesian coordinates of the atom and the ion COM. Note that Eq. (\ref{TotalEnergy}) uses the MMA to assume that $\phi$ is not changing.
+
+% Further simplification of the description of the collision can be obtained by changing from Cartesian variables to plane-polar variables where $R=\sqrt{x^2+y^2}$ and $\theta=\tan^{-1}(y/x)$.  Since the origin of the plane-polar system is at the center of mass of the three particles, it can be shown that the coordinates of the neutral atom and the ion center-of-massare
+% \begin{equation}
+%     x_i = \frac{\mu_j r\cos(\theta)}{m_i+\mu_j} \; \; \; \;
+%     y_i = \frac{\mu_j r\sin(\theta)}{m_i+\mu_j}
+%     \label{Coordinates_i}
+% \end{equation}
+% and
+% \begin{equation}
+%     x_j = \frac{m_i r\cos(\theta)}{m_i+\mu_j} \; \; \; \;
+%     y_j = \frac{m_i r\sin(\theta)}{m_i+\mu_j}.
+%     \label{Coordinates_j}
+% \end{equation}
+% Substituting these expressions into Eq. (\ref{TotalEnergy}) gives
+% \begin{equation}
+%     KE_f=\frac{1}{2}\mu_{ij}\left[\left(\frac{dr}{dt}\right)^2+r^2\left(\frac{d\theta}{dt}\right)^2\right]+\frac{1}{2} \mu_{ij}r^2 \left(\frac{d\theta}{dt} \right)^2.
+%     \label {2D Total Energy 2}
+% \end{equation}
+% Since every aspect of the collision occurs in plane $K$, conservation of energy requires that
+% \begin{equation}
+%     \frac{1}{2}\mu_{ij}g^2=\frac{1}{2}\mu_{ij}\left[\left(\frac{dr}{dt}\right)^2+r^2\left(\frac{d\theta}{dt}\right)^2\right]
+%     \\ +\frac{1}{2} \mu_{ij}r^2 \left(\frac{d\theta}{dt} \right)^2 +V(r, \phi),
+%     \label{Conservation of Energy}
+% \end{equation}
+% \begin{equation}
+%     \frac{1}{2}\mu_{ij}g^2=\frac{1}{2}\mu_{ij}\left[\left(\frac{dr}{dt}\right)^2+2r^2\left(\frac{d\theta}{dt}\right)^2\right]
+%     \\ +V(r, \phi),
+% \end{equation}
+% where $g$ is the initial relative speed of the colliding molecules, i.e. the relative speed when the separation between them is large enough that the potential energy, $V(r)$, is negligible.  Similarly, conservation of angular momentum requires that
+% \begin{equation}
+%     \mu_{ij}bg=\mu_{ij}r^2\left(\frac{d\theta}{dt}\right).
+% \end{equation}
+% The left-hand side of this equation is the angular momentum when the two particles are infinitely far apart, i.e. when $V(r)$ is negligible and $g$ is perpendicular to the axis along which $b$ is measured.
+
+% The last equation allows yet another simplification of our problem.  If we use it to write
+% \begin{equation}
+%   \frac{d\theta}{dt}= \frac{bg}{r^2},
+%   \label{Conservation of Angula Momentum}
+% \end{equation}
+% then Eq. (\ref{Conservation of Energy}) becomes
+
+
+
+\bibliography{mybibfile2}
+\end{document}

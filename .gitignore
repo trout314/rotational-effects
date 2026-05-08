@@ -12,6 +12,7 @@ PCforBMM
 
 # Compiled Fortran binaries (may appear in data/ from manual runs)
 data/PCforBMM
+data/PC_debug
 data/*.mod
 
 # Fortran/program output files (in data/)
