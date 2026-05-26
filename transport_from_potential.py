@@ -9,6 +9,15 @@ from scipy.integrate import quad
 from scipy.optimize import root_scalar
 
 
+# Cross-cutting constants used by multiple integrand / quadrature call sites.
+# Floor added to denominators near turning-point singularities to avoid
+# division by zero in the deflection-angle integrands.
+DENOM_FLOOR = 1.0e-30
+# Maximum number of subintervals scipy.quad is allowed to use for any of
+# the deflection / cross-section integrals.
+QUAD_SUBINTERVAL_LIMIT = 200
+
+
 # ---------------------------------------------------------------------------
 # Potential with extrapolation
 # ---------------------------------------------------------------------------
@@ -114,7 +123,19 @@ def orbiting_scan(pot, emin, nlong, clong):
     ascending energy order, with localized E dips marking multi-orbit
     regions that orbiting_regions then splits on.
     """
-    R_LIMIT = 1.0e3  # hard ceiling matching PC.f95 line 401
+    # Hard ceiling on r during the outward search (matches PC.f95 line 401).
+    WALK_R_LIMIT = 1.0e3
+    # Multiplicative step taken while r is still within the tabulated data.
+    WALK_STEP_NEAR = 1.01
+    # Larger step once r has exited the tabulated data range.
+    WALK_STEP_FAR = 1.05
+    # Base of the geometric nudge factor (1 - REFINE_FACTOR_BASE**level) used
+    # to polish each orbiting separation; level runs 1..REFINE_LEVELS.
+    REFINE_FACTOR_BASE = 0.001
+    REFINE_LEVELS = 7
+    # Number of intermediate r samples inserted between two consecutive orbits
+    # when the orbit-list energy goes "the wrong way" (multi-orbit signature).
+    DENSIFY_STEPS = 19
 
     def eval_at(r):
         c1 = pot.deriv(r)
@@ -134,9 +155,9 @@ def orbiting_scan(pot, emin, nlong, clong):
         if c1 > 0 and c2 < 0 and veff > 0:
             orbits.append(make_entry(r, c1, veff))
             is_first = (len(orbits) == 1)
-            for level in range(1, 8):
+            for level in range(1, REFINE_LEVELS + 1):
                 while True:
-                    r_try = (1 - 0.001**level) * orbits[-1][2]
+                    r_try = (1 - REFINE_FACTOR_BASE**level) * orbits[-1][2]
                     c1_t, c2_t, veff_t = eval_at(r_try)
                     if (c1_t > 0 and c2_t < 0
                             and veff_t > orbits[-1][0]):
@@ -146,11 +167,11 @@ def orbiting_scan(pot, emin, nlong, clong):
                     break
         if orbits and 0 < orbits[-1][0] <= emin:
             break
-        r *= 1.05 if r > pot.rmax else 1.01
-        if r > R_LIMIT:
+        r *= WALK_STEP_FAR if r > pot.rmax else WALK_STEP_NEAR
+        if r > WALK_R_LIMIT:
             if not orbits:
                 raise RuntimeError(
-                    f"No orbiting found up to r={R_LIMIT}.")
+                    f"No orbiting found up to r={WALK_R_LIMIT}.")
             break
 
     if not orbits:
@@ -163,8 +184,8 @@ def orbiting_scan(pot, emin, nlong, clong):
     nlong3_special = False
     if nlong == 3 and clong < 0:
         outer = orbits[-1]
-        for level in range(1, 8):
-            r_try = (1 + 0.001**level) * outer[2]
+        for level in range(1, REFINE_LEVELS + 1):
+            r_try = (1 + REFINE_FACTOR_BASE**level) * outer[2]
             c1_t, c2_t, veff_t = eval_at(r_try)
             if (c1_t > 0 and c2_t < 0
                     and 0 < veff_t < outer[0]):
@@ -193,8 +214,9 @@ def orbiting_scan(pot, emin, nlong, clong):
             if new_orbits[-1][0] > walk_order[k + 1][0]:
                 r_K = new_orbits[-1][2]
                 r_NO = walk_order[k + 1][2]
-                for i in range(1, 20):
-                    r_test = ((20 - i) * r_K + i * r_NO) / 20
+                divisions = DENSIFY_STEPS + 1
+                for i in range(1, divisions):
+                    r_test = ((divisions - i) * r_K + i * r_NO) / divisions
                     c1_t, c2_t, veff_t = eval_at(r_test)
                     if (c1_t > 0 and c2_t < 0
                             and veff_t > new_orbits[-1][0]):
@@ -206,8 +228,9 @@ def orbiting_scan(pot, emin, nlong, clong):
                     and new_orbits[-1][0] < new_orbits[-2][0]):
                 r_J = new_orbits[-1][2]
                 r_Jm1 = new_orbits[-2][2]
-                for i in range(1, 20):
-                    r_test = r_J + i / 20.0 * (r_J - r_Jm1)
+                divisions = DENSIFY_STEPS + 1
+                for i in range(1, divisions):
+                    r_test = r_J + i / divisions * (r_J - r_Jm1)
                     c1_t, c2_t, veff_t = eval_at(r_test)
                     if (c1_t > 0 and c2_t < 0
                             and veff_t > new_orbits[-1][0]):
@@ -257,21 +280,47 @@ class CrossSectionSolver:
     """
 
     def __init__(self, pot, orbit_list, regions, nlong, clong, accuracy):
+        # Integrand-level accuracy is held this much tighter than the requested
+        # overall cross-section accuracy.
+        INTEGRAND_ACCURACY_FRACTION = 0.8
+        # Cross-section energy bands split at EMIN, EC, and EC2 = EC2_FACTOR * EC.
+        EC2_FACTOR = 10
+
         self.pot = pot
         self.orbit_list = orbit_list
         self.regions = regions
         self.nlong = nlong
         self.clong = clong
         self.accuracy = accuracy
-        self.acc1 = 0.8 * accuracy
+        self.acc1 = INTEGRAND_ACCURACY_FRACTION * accuracy
         self.EC = max(r[1] for r in regions) if regions else 0.0
         self.ED = 0.0  # Set externally for nlong=3 case
-        self.EC2 = 10 * self.EC
+        self.EC2 = EC2_FACTOR * self.EC
 
     # -- Turning point finder ------------------------------------------------
 
     def find_turning_point(self, E, b, r_guess=None):
         """Find R where E - V(R) - E*b²/R² = 0."""
+        # Half-width of the "near EC" window (1% on either side of EC) where
+        # the bracket-shrink factor must be made very small.
+        EC_PROXIMITY_FRACTION = 0.01
+        # Bracket-shrink factor inside the near-EC window (slow & careful).
+        BRACKET_SHRINK_NEAR_EC = 0.999
+        # Default bracket-shrink factor away from EC.
+        BRACKET_SHRINK_DEFAULT = 0.95
+        # Iteration cap on every bracket-search loop below.
+        BRACKET_SEARCH_ITER_MAX = 2000
+        # Upper-r fallback used when the outward bracket couldn't find Y > 0.
+        BRACKET_UPPER_FALLBACK_R = 1.0e4
+        # Abort the search if r ever exceeds this during outward bracketing.
+        BRACKET_ABORT_R = 1.0e6
+        # Stop the inward bracket search once r drops below this fraction of rmin.
+        BRACKET_R_NEG_RMIN_FRACTION = 0.3
+        # Initial r used in the bracket-finding fallback branch (fraction of rmin).
+        BRACKET_FALLBACK_R_FRACTION = 0.5
+        # brentq xtol/rtol for the final turning-point root.
+        TURNING_POINT_TOL = 1.0e-14
+
         pot = self.pot
 
         def Y(r):
@@ -286,41 +335,44 @@ class CrossSectionSolver:
         # Bracket finding: scan from initial guess
         r0 = r_guess if r_guess is not None else pot.rmax
         r0 = max(r0, pot.rmin)
-        scale = 0.999 if (self.EC > 0 and 0.99 * self.EC < E < 1.01 * self.EC) else 0.95
+        near_ec = (self.EC > 0
+                   and (1 - EC_PROXIMITY_FRACTION) * self.EC < E
+                                                            < (1 + EC_PROXIMITY_FRACTION) * self.EC)
+        scale = BRACKET_SHRINK_NEAR_EC if near_ec else BRACKET_SHRINK_DEFAULT
 
         # Find r_pos (Y > 0) and r_neg (Y < 0)
         r_pos = r_neg = None
         r = r0
-        for _ in range(500):
+        for _ in range(BRACKET_SEARCH_ITER_MAX):
             if Y(r) > 0:
                 r_pos = r
                 break
             r /= scale
         if r_pos is None:
-            if Y(1e4) > 0:
-                r_pos = 1e4
+            if Y(BRACKET_UPPER_FALLBACK_R) > 0:
+                r_pos = BRACKET_UPPER_FALLBACK_R
 
         if r_pos is not None:
             r = r_pos
-            for _ in range(2000):
+            for _ in range(BRACKET_SEARCH_ITER_MAX):
                 r *= scale
-                if r < 0.3 * pot.rmin:
+                if r < BRACKET_R_NEG_RMIN_FRACTION * pot.rmin:
                     break
                 if Y(r) < 0:
                     r_neg = r
                     break
 
         if r_neg is None or r_pos is None:
-            r = 0.5 * pot.rmin
+            r = BRACKET_FALLBACK_R_FRACTION * pot.rmin
             if Y(r) < 0:
                 r_neg = r
                 r = pot.rmin
-                for _ in range(2000):
+                for _ in range(BRACKET_SEARCH_ITER_MAX):
                     r /= scale
                     if Y(r) > 0:
                         r_pos = r
                         break
-                    if r > 1e6:
+                    if r > BRACKET_ABORT_R:
                         break
 
         if r_neg is None or r_pos is None:
@@ -328,7 +380,7 @@ class CrossSectionSolver:
 
         lo, hi = min(r_neg, r_pos), max(r_neg, r_pos)
         r = root_scalar(Y, bracket=[lo, hi], method='brentq',
-                        xtol=1e-14, rtol=1e-14).root
+                        xtol=TURNING_POINT_TOL, rtol=TURNING_POINT_TOL).root
 
         # Adjust b for consistency
         bc = 1 - pot(r) / E
@@ -339,8 +391,13 @@ class CrossSectionSolver:
 
     def find_orbiting_at_energy(self, E):
         """Directly solve for orbiting (b, R) at energy E."""
+        # Number of log-spaced samples used to bracket orbiting roots at fixed E.
+        ORBIT_AT_ENERGY_SCAN_POINTS = 3000
+        # brentq xtol for the orbit-at-energy root.
+        ORBIT_AT_ENERGY_TOL = 1.0e-12
+
         pot = self.pot
-        r_scan = np.logspace(np.log10(pot.rmin), 3, 3000)
+        r_scan = np.logspace(np.log10(pot.rmin), 3, ORBIT_AT_ENERGY_SCAN_POINTS)
 
         # Evaluate Eorb - E across scan, tracking sign changes within orbiting region
         prev_diff = prev_r = None
@@ -362,7 +419,8 @@ class CrossSectionSolver:
             try:
                 r_root = root_scalar(
                     lambda r: pot(r) + r * pot.deriv(r) / 2 - E,
-                    bracket=[r_lo, r_hi], method='brentq', xtol=1e-12).root
+                    bracket=[r_lo, r_hi], method='brentq',
+                    xtol=ORBIT_AT_ENERGY_TOL).root
                 c1 = pot.deriv(r_root)
                 c2 = pot.deriv2(r_root) + 3 * c1 / r_root
                 veff = pot(r_root) + r_root * c1 / 2
@@ -437,7 +495,7 @@ class CrossSectionSolver:
 
             denom = 1 - rm**3 * pot.deriv(rm) / (2 * b_adj**2 * E)
             if denom <= 0:
-                denom = abs(denom) + 1e-30
+                denom = abs(denom) + DENOM_FLOOR
 
             def ga(y):
                 r = rm / np.cos(np.pi * (y + 1) / 4)
@@ -448,10 +506,14 @@ class CrossSectionSolver:
                     return 0.0
                 return 1 - b_adj / rm * np.sin(np.pi * (y + 1) / 4) / np.sqrt(val)
 
-            result, _ = quad(ga, -1, 1, limit=200, epsrel=self.acc1)
+            result, _ = quad(ga, -1, 1,
+                             limit=QUAD_SUBINTERVAL_LIMIT, epsrel=self.acc1)
             return HPI * result
 
         else:
+            # Treat |y| below this as exactly 0 when evaluating gb (machine-eps).
+            Y_EPSILON = 1.0e-15
+
             rbar = max(RO[:naitk])
             rm, b_adj = self.find_turning_point(E, b)
             if rm >= rbar:
@@ -463,7 +525,7 @@ class CrossSectionSolver:
                 rm, b_adj = self.find_turning_point(E, b_adj)
                 denom = 1 - rm**3 * pot.deriv(rm) / (2 * E * b_adj**2)
                 if denom <= 0:
-                    denom = abs(denom) + 1e-30
+                    denom = abs(denom) + DENOM_FLOOR
 
             ea = 1.0
             eb = 1 - b_adj / rbar - np.arccos(rm / rbar) / np.sqrt(denom)
@@ -483,10 +545,11 @@ class CrossSectionSolver:
                     func -= (b_adj / rm * z1 * np.sin(z2)
                              * np.sin(np.pi * (1 + y) / 4) / np.sqrt(z3b))
                 else:
-                    func = ea if abs(y) < 1e-15 else eb
+                    func = ea if abs(y) < Y_EPSILON else eb
                 return func
 
-            result, _ = quad(gb, -1, 1, limit=200, epsrel=self.acc1)
+            result, _ = quad(gb, -1, 1,
+                             limit=QUAD_SUBINTERVAL_LIMIT, epsrel=self.acc1)
             return HPI * result
 
     # -- EofB: deflection -> cross-section integrand -------------------------
@@ -659,7 +722,7 @@ class CrossSectionSolver:
         for L_idx in range(ell_max):
             cache.clear()
             val, _ = quad(cached_integrand, -1, 1, args=(L_idx,),
-                          limit=200, epsrel=self.acc1)
+                          limit=QUAD_SUBINTERVAL_LIMIT, epsrel=self.acc1)
             cross_sections[L_idx] = val
 
         return cross_sections
