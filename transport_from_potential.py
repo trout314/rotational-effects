@@ -106,58 +106,118 @@ def read_potentials(files_and_angles):
 # Orbiting scan
 # ---------------------------------------------------------------------------
 
-def orbiting_scan(pot, emin, nlong, clong, n_samples=300):
-    """Find orbiting parameters by root-finding the region boundaries.
+def orbiting_scan(pot, emin, nlong, clong):
+    """Find orbiting parameters by outward walk + refinement + densification.
 
-    Returns (orbit_list, ED) where orbit_list is [(E, b, R), ...] sorted
-    by increasing energy.
+    Port of SUBROUTINE ORBITS in PC.f95 by L. A. Viehland.  Returns
+    (orbit_list, ED) where orbit_list is [(E, b, R), ...] in (mostly)
+    ascending energy order, with localized E dips marking multi-orbit
+    regions that orbiting_regions then splits on.
     """
-    def c2_func(r):
-        return pot.deriv2(r) + 3 * pot.deriv(r) / r
+    R_LIMIT = 1.0e3  # hard ceiling matching PC.f95 line 401
 
-    def eorb(r):
-        return pot(r) + r * pot.deriv(r) / 2
-
-    # Find inner boundary where c2 = 0 (this gives EC)
-    r_scan = np.logspace(np.log10(pot.rmin), 3, 5000)
-    c2_vals = np.array([c2_func(r) for r in r_scan])
-    sign_changes = np.where((c2_vals[:-1] >= 0) & (c2_vals[1:] < 0))[0]
-
-    if len(sign_changes) == 0:
-        raise RuntimeError("Could not find inner orbiting boundary")
-
-    r_min = root_scalar(c2_func, bracket=(r_scan[sign_changes[0]], r_scan[sign_changes[0] + 1]),
-                        method='brentq', xtol=1e-14).root
-    EC = eorb(r_min)
-
-    # Find outer boundary where Eorb(r) = emin
-    eorb_vals = np.array([eorb(r) for r in r_scan])
-    mask = (r_scan > r_min) & (eorb_vals[:-1] if len(eorb_vals) > len(r_scan) else np.ones(len(r_scan), dtype=bool))
-    r_outer = r_scan[r_scan > r_min]
-    eorb_outer = np.array([eorb(r) for r in r_outer])
-    crossings = np.where((eorb_outer[:-1] - emin > 0) & (eorb_outer[1:] - emin <= 0))[0]
-
-    if len(crossings) > 0:
-        r_max = root_scalar(lambda r: eorb(r) - emin,
-                            bracket=(r_outer[crossings[0]], r_outer[crossings[0] + 1]),
-                            method='brentq', xtol=1e-10).root
-    else:
-        r_max = r_scan[-1]
-
-    # Sample on fixed log-spaced grid
-    r_grid = np.logspace(np.log10(r_min + 1e-10), np.log10(r_max), n_samples)
-    orbit_list = []
-    for r in r_grid:
+    def eval_at(r):
         c1 = pot.deriv(r)
         c2 = pot.deriv2(r) + 3 * c1 / r
         veff = pot(r) + r * c1 / 2
+        return c1, c2, veff
+
+    def make_entry(r, c1, veff):
+        return (veff, (r**3 * c1 / (2 * veff))**0.5, r)
+
+    # Phase 1: outward walk from pot.rmin with inward refinement at each orbit.
+    # orbits is filled in increasing-R order (innermost first, outermost last).
+    orbits = []
+    r = pot.rmin
+    while True:
+        c1, c2, veff = eval_at(r)
         if c1 > 0 and c2 < 0 and veff > 0:
-            orbit_list.append((veff, np.sqrt(r**3 * c1 / (2 * veff)), r))
+            orbits.append(make_entry(r, c1, veff))
+            is_first = (len(orbits) == 1)
+            for level in range(1, 8):
+                while True:
+                    r_try = (1 - 0.001**level) * orbits[-1][2]
+                    c1_t, c2_t, veff_t = eval_at(r_try)
+                    if (c1_t > 0 and c2_t < 0
+                            and veff_t > orbits[-1][0]):
+                        orbits[-1] = make_entry(r_try, c1_t, veff_t)
+                        if is_first:
+                            continue
+                    break
+        if orbits and 0 < orbits[-1][0] <= emin:
+            break
+        r *= 1.05 if r > pot.rmax else 1.01
+        if r > R_LIMIT:
+            if not orbits:
+                raise RuntimeError(
+                    f"No orbiting found up to r={R_LIMIT}.")
+            break
 
-    orbit_list.reverse()  # increasing energy
+    if not orbits:
+        return [], 0.0
 
-    ed = orbit_list[0][0] if (nlong == 3 and clong < 0 and orbit_list) else 0.0
-    return orbit_list, ed
+    # Phase 2: special ED handling for NLONG=3 with attractive long range.
+    # Refines the outermost orbit by nudging OUTWARD, looking for a local
+    # veff MINIMUM (the lower edge of the orbiting energy band).
+    ed = 0.0
+    nlong3_special = False
+    if nlong == 3 and clong < 0:
+        outer = orbits[-1]
+        for level in range(1, 8):
+            r_try = (1 + 0.001**level) * outer[2]
+            c1_t, c2_t, veff_t = eval_at(r_try)
+            if (c1_t > 0 and c2_t < 0
+                    and 0 < veff_t < outer[0]):
+                outer = make_entry(r_try, c1_t, veff_t)
+        orbits[-1] = outer
+        ed = outer[0]
+        nlong3_special = True
+
+    # Phase 3: walk outermost->innermost, densifying multi-orbit regions.
+    # walk_order[0] is outermost (lowest E), walk_order[-1] is innermost.
+    walk_order = list(reversed(orbits))
+    new_orbits = []
+    start_k = 0
+    if nlong3_special:
+        new_orbits.append(walk_order[0])
+        start_k = 1
+
+    n = len(walk_order)
+    for k in range(start_k, n):
+        new_orbits.append(walk_order[k])
+        if k == n - 1:
+            break
+        if k < n - 2:
+            # Standard case: interpolate between walk_order[k] and walk_order[k+1]
+            # whenever E is about to dip (multi-orbit signature).
+            if new_orbits[-1][0] > walk_order[k + 1][0]:
+                r_K = new_orbits[-1][2]
+                r_NO = walk_order[k + 1][2]
+                for i in range(1, 20):
+                    r_test = ((20 - i) * r_K + i * r_NO) / 20
+                    c1_t, c2_t, veff_t = eval_at(r_test)
+                    if (c1_t > 0 and c2_t < 0
+                            and veff_t > new_orbits[-1][0]):
+                        new_orbits.append(make_entry(r_test, c1_t, veff_t))
+        else:
+            # k == n - 2: exactly one entry remains in walk_order.
+            # Extrapolate inward from the previous step (PC.f95:484-499).
+            if (len(new_orbits) >= 2
+                    and new_orbits[-1][0] < new_orbits[-2][0]):
+                r_J = new_orbits[-1][2]
+                r_Jm1 = new_orbits[-2][2]
+                for i in range(1, 20):
+                    r_test = r_J + i / 20.0 * (r_J - r_Jm1)
+                    c1_t, c2_t, veff_t = eval_at(r_test)
+                    if (c1_t > 0 and c2_t < 0
+                            and veff_t > new_orbits[-1][0]):
+                        new_orbits.append(make_entry(r_test, c1_t, veff_t))
+
+    # Phase 4: trim trailing entries that haven't started ascending again.
+    while len(new_orbits) >= 2 and new_orbits[-1][0] < new_orbits[-2][0]:
+        new_orbits.pop()
+
+    return new_orbits, ed
 
 
 def orbiting_regions(orbit_list):
