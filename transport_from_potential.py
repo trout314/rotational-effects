@@ -81,6 +81,18 @@ class Potential:
             return self.long_coef * n * (n - 1) * r ** (n - 2)
         return float(self._spline_d2(r))
 
+    def veff(self, r):
+        """Effective potential at the orbiting separation: V(r) + r·V'(r)/2.
+
+        Equals the barrier maximum of the full effective potential V(r) +
+        L²/(2μr²) when r happens to be the location of the maximum.
+        """
+        return self(r) + r * self.deriv(r) / 2
+
+
+# Half pi: appears in nearly every Chebyshev change-of-variable below.
+HPI = np.pi / 2
+
 
 # ---------------------------------------------------------------------------
 # I/O
@@ -98,17 +110,6 @@ def read_single_potential(filename):
         nlong = int(f.readline())
         data = np.loadtxt(f, max_rows=nv)
     return comment, accuracy, emin, emax, nlong, data[:, 0].tolist(), data[:, 1].tolist()
-
-
-def read_potentials(files_and_angles):
-    """Read angle-dependent potentials from PC.in.XXX files."""
-    angles, distances, energies = [], {}, {}
-    for filename, angle in files_and_angles:
-        data = np.loadtxt(filename, skiprows=1)
-        angles.append(angle)
-        distances[angle] = data[:, 0].tolist()
-        energies[angle] = data[:, 1].tolist()
-    return angles, distances, energies
 
 
 # ---------------------------------------------------------------------------
@@ -279,7 +280,7 @@ class CrossSectionSolver:
     Encapsulates the potential, orbiting data, and numerical parameters.
     """
 
-    def __init__(self, pot, orbit_list, regions, nlong, clong, accuracy):
+    def __init__(self, pot, orbit_list, regions, nlong, clong, accuracy, ED=0.0):
         # Integrand-level accuracy is held this much tighter than the requested
         # overall cross-section accuracy.
         INTEGRAND_ACCURACY_FRACTION = 0.8
@@ -294,7 +295,7 @@ class CrossSectionSolver:
         self.accuracy = accuracy
         self.acc1 = INTEGRAND_ACCURACY_FRACTION * accuracy
         self.EC = max(r[1] for r in regions) if regions else 0.0
-        self.ED = 0.0  # Set externally for nlong=3 case
+        self.ED = ED  # Lower orbiting-energy edge; nonzero only for NLONG=3.
         self.EC2 = EC2_FACTOR * self.EC
 
     # -- Turning point finder ------------------------------------------------
@@ -442,7 +443,8 @@ class CrossSectionSolver:
         BO_list, RO_list = [], []
         for e_low, e_high, idx_low, idx_high in self.regions:
             if E < e_low or E > e_high:
-                BO_list.append(0.0); RO_list.append(0.0)
+                BO_list.append(0.0)
+                RO_list.append(0.0)
             elif E <= e_low:
                 BO_list.append(self.orbit_list[idx_low][1])
                 RO_list.append(self.orbit_list[idx_low][2])
@@ -478,7 +480,6 @@ class CrossSectionSolver:
 
     def deflection_angle(self, E, b, naitk, BO, RO, ROMAX):
         """Compute scattering angle theta at energy E, impact parameter b."""
-        HPI = np.pi / 2
         pot = self.pot
 
         # Determine case
@@ -569,7 +570,6 @@ class CrossSectionSolver:
 
         Returns array of length ell_max.
         """
-        HPI = np.pi / 2
         pot = self.pot
         NO = len(self.orbit_list)
         fun = np.zeros(ell_max)
@@ -597,7 +597,7 @@ class CrossSectionSolver:
                     b2 = r1 * np.sqrt(bc)
                     temp = ((HPI * rbar)**2 / 2 * (1 - x11)
                             * np.sin(HPI * (x1 + 1))
-                            * (1 - pot(r1) / E - r1 / 2 * pot.deriv(r1) / E))
+                            * (1 - pot.veff(r1) / E))
                     ans = self.eofb(b2, temp, E, ell_max, naitk, BO, RO, ROMAX)
                     fun += ans if RO[i] < RO[i + 1] else -ans
 
@@ -615,7 +615,7 @@ class CrossSectionSolver:
                     b2 = r2 * np.sqrt(bc)
                     temp = ((HPI * ro_max_i)**2 / 2 * (1 + x12)
                             * np.sin(HPI * (x2 + 1))
-                            * (1 - pot(r2) / E - r2 / 2 * pot.deriv(r2) / E))
+                            * (1 - pot.veff(r2) / E))
                     ans = self.eofb(b2, temp, E, ell_max, naitk, BO, RO, ROMAX)
                     fun += ans if RO[i] < RO[i + 1] else -ans
 
@@ -631,7 +631,7 @@ class CrossSectionSolver:
                         temp = ((HPI * RO[naitk - 1])**2 * 2
                                 * (r3 / RO[naitk - 1])**3
                                 * np.cos(HPI * x3)
-                                * (1 - pot(r3) / E - r3 / 2 * pot.deriv(r3) / E))
+                                * (1 - pot.veff(r3) / E))
                         fun += self.eofb(b2, temp, E, ell_max, naitk, BO, RO, ROMAX)
 
         # Regime 2: above orbiting (EC < E <= 10*EC)
@@ -644,13 +644,13 @@ class CrossSectionSolver:
                 for L in range(2, ell_max + 1, 2):
                     fun[L - 1] = -np.pi * r2**2 * (r1 - r2) * pot.deriv(r2) / E
             elif y >= 1:
-                temp = np.pi * r1 * (r1 - r2) * (1 - pot(r1) / E - r1 / 2 * pot.deriv(r1) / E)
+                temp = np.pi * r1 * (r1 - r2) * (1 - pot.veff(r1) / E)
                 fun = self.eofb(ROMAX, temp, E, ell_max, naitk, BO, RO, ROMAX)
             else:
                 r4 = ((r1 - r2) * y + r1 + r2) / 2
                 bc = 1 - pot(r4) / E
                 b2 = r4 * np.sqrt(abs(bc))
-                temp = np.pi * (r1 - r2) * r4 * (1 - pot(r4) / E - r4 / 2 * pot.deriv(r4) / E)
+                temp = np.pi * (r1 - r2) * r4 * (1 - pot.veff(r4) / E)
                 fun = self.eofb(b2, temp, E, ell_max, naitk, BO, RO, ROMAX)
 
                 x3 = (1 + y) / 2
@@ -662,7 +662,7 @@ class CrossSectionSolver:
                         b2 = r5 * np.sqrt(bc)
                         temp = ((HPI * r1)**2 * 2 * (r5 / r1)**3
                                 * np.cos(HPI * x3)
-                                * (1 - pot(r5) / E - r5 / 2 * pot.deriv(r5) / E))
+                                * (1 - pot.veff(r5) / E))
                         fun += self.eofb(b2, temp, E, ell_max, naitk, BO, RO, ROMAX)
 
         # Regime 3: far from orbiting
@@ -737,8 +737,7 @@ def compute_all_cross_sections(pot, emin, emax, accuracy, nlong, clong, ell_max=
     orbit_list, ED = orbiting_scan(pot, emin, nlong, clong)
     regions = orbiting_regions(orbit_list)
 
-    solver = CrossSectionSolver(pot, orbit_list, regions, nlong, clong, accuracy)
-    solver.ED = ED
+    solver = CrossSectionSolver(pot, orbit_list, regions, nlong, clong, accuracy, ED=ED)
 
     EC = solver.EC
     EC2 = solver.EC2
@@ -796,8 +795,7 @@ if __name__ == "__main__":
     for E_orb, b_orb, r_orb in orbit_list[-3:]:
         print(f"{E_orb:24.14e} {b_orb:24.14e} {r_orb:24.14e}")
 
-    solver = CrossSectionSolver(pot, orbit_list, regions, nlong, clong, accuracy)
-    solver.ED = ED
+    solver = CrossSectionSolver(pot, orbit_list, regions, nlong, clong, accuracy, ED=ED)
 
     # Test at energies from Fortran output
     test_energies = [1e-9, 6.48e-9, 5.9e-7, 5.37e-5, 3.48e-4, 5e-4]

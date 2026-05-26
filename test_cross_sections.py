@@ -51,8 +51,7 @@ def build_solver(angle):
 
     orbit_list, ED = orbiting_scan(pot, 1e-9, 4, clong)
     regions = orbiting_regions(orbit_list)
-    solver = CrossSectionSolver(pot, orbit_list, regions, 4, clong, 0.001)
-    solver.ED = ED
+    solver = CrossSectionSolver(pot, orbit_list, regions, 4, clong, 0.001, ED=ED)
     return solver
 
 
