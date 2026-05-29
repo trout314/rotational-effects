@@ -12,11 +12,15 @@ Also includes:
 - accuracy-convergence check that solving at accuracy=1e-3 vs 1e-4 moves
   Q^(1), Q^(2) by less than the looser run's stated accuracy (internal
   consistency, no Fortran involved);
+- chi-independent check that solver.deflection_angle agrees with a from-
+  scratch r-space recomputation that shares no change-of-variables with
+  the production code (internal consistency, no Fortran involved);
 - multi-orbit region count check against PC_mult_orb.in (must detect the
   4 disjoint orbiting energy regions Fortran finds).
 """
 
 import numpy as np
+from scipy.integrate import quad
 from transport_from_potential import (
     read_single_potential, Potential,
     orbiting_scan, orbiting_regions, CrossSectionSolver,
@@ -173,6 +177,66 @@ def test_accuracy_convergence():
     return failures
 
 
+def chi_independent(pot, r_m, E, b):
+    """chi(E, b) via direct r-space integration with u = b/r substitution.
+
+    chi = pi - 2 * integral_0^{u_max} du / sqrt(1 - u^2 - V(b/u)/E),
+    with u_max = b/r_m.  The sqrt singularity at u = u_max is absorbed by
+    a second substitution s = sqrt(u_max - u), making the integrand smooth
+    at the endpoint.  Shares no change-of-variables or integrand with
+    solver.deflection_angle.
+    """
+    u_max = b / r_m
+
+    def integrand(s):
+        u = u_max - s * s
+        if u <= 0:
+            return 0.0
+        f = 1.0 - u * u - pot(b / u) / E
+        if f <= 0:
+            return 0.0
+        return 2.0 * s / np.sqrt(f)
+
+    result, _ = quad(integrand, 0.0, np.sqrt(u_max),
+                     epsrel=1e-10, epsabs=1e-14)
+    return np.pi - 2.0 * result
+
+
+def test_chi_independent():
+    """Internal consistency: production chi agrees with from-scratch chi.
+
+    Catches bugs in the production change-of-variables and limit handling
+    that the accuracy-convergence check can't, since both runs there share
+    the same algorithm.
+    """
+    TOLERANCE = 1.0e-3  # production runs at accuracy=1e-3 by default
+
+    solver = build_solver(0)
+    # E > EC (~3.5e-4 at angle 0) so the qint code path sets naitk=0,
+    # BO=[]; deflection_angle stays in case1 (single turning point) and
+    # matches the production call signature.
+    test_pairs = [(5.0e-4, 0.5), (5.0e-4, 5.0), (5.0e-4, 50.0)]
+
+    failures = 0
+    max_diff = 0.0
+    for E, b in test_pairs:
+        chi_prod = solver.deflection_angle(
+            E, b, naitk=0, BO=[], RO=[], ROMAX=0.0)
+        r_m, _ = solver.find_turning_point(E, b)
+        chi_scratch = chi_independent(solver.pot, r_m, E, b)
+        diff = abs(chi_prod - chi_scratch)
+        max_diff = max(max_diff, diff)
+        if diff > TOLERANCE:
+            failures += 1
+            print(f"  [FAIL] E={E:.2e} b={b}  prod={chi_prod:.8f}  "
+                  f"indep={chi_scratch:.8f}  |diff|={diff:.2e}")
+
+    status = "PASS" if failures == 0 else "FAIL"
+    print(f"  [{status}] max |chi_prod - chi_indep| = {max_diff:.2e} rad "
+          f"over {len(test_pairs)} (E, b) points")
+    return failures
+
+
 def test_mult_orb_regions():
     """Check that PC_mult_orb.in yields the 4 orbiting regions Fortran finds.
 
@@ -217,6 +281,10 @@ if __name__ == "__main__":
 
     print("Accuracy convergence (angle=0, accuracy 1e-3 vs 1e-4):")
     total_failures += test_accuracy_convergence()
+    print()
+
+    print("Independent chi recomputation (angle=0, E > EC):")
+    total_failures += test_chi_independent()
     print()
 
     print("Multi-orbit regions (PC_mult_orb.in):")
