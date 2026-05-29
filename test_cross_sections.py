@@ -9,6 +9,9 @@ Also includes:
   angle=0 potential at E=1e-9, b=160.54817488594156;
 - turning-point residual check that |E - V(r_m) - E*b^2/r_m^2| ~ 0 across a
   grid of (E, b) sample points (internal consistency, no Fortran involved);
+- accuracy-convergence check that solving at accuracy=1e-3 vs 1e-4 moves
+  Q^(1), Q^(2) by less than the looser run's stated accuracy (internal
+  consistency, no Fortran involved);
 - multi-orbit region count check against PC_mult_orb.in (must detect the
   4 disjoint orbiting energy regions Fortran finds).
 """
@@ -46,7 +49,7 @@ def read_pc_out(path):
             for i in range(0, len(floats), 31)]
 
 
-def build_solver(angle):
+def build_solver(angle, accuracy=0.001):
     data = np.loadtxt(f"data/PC.in.{angle:03d}", skiprows=1)
     distances = data[:, 0].tolist()
     energies = data[:, 1].tolist()
@@ -56,7 +59,7 @@ def build_solver(angle):
 
     orbit_list, ED = orbiting_scan(pot, 1e-9, 4, clong)
     regions = orbiting_regions(orbit_list)
-    solver = CrossSectionSolver(pot, orbit_list, regions, 4, clong, 0.001, ED=ED)
+    solver = CrossSectionSolver(pot, orbit_list, regions, 4, clong, accuracy, ED=ED)
     return solver
 
 
@@ -131,6 +134,45 @@ def test_turning_point_residual():
     return 0 if status == "PASS" else 1
 
 
+def test_accuracy_convergence():
+    """Tightening the accuracy knob must change Q^(1), Q^(2) by less than
+    the looser run's stated accuracy.
+
+    Internal consistency: if compute(E) at accuracy=A truly delivers an
+    answer accurate to A, then rerunning at a tighter accuracy should move
+    the result by less than A.  A failure here means the quadrature isn't
+    actually converging at the requested accuracy.
+    """
+    A_LOOSE = 1.0e-3
+    A_TIGHT = 1.0e-4
+    # Sample low, mid, and high E in the input range.  At angle 0 the
+    # orbiting region is [~8e-10, 3.5e-4], so 1e-9 is just below, 1e-6 is
+    # well inside, and 5e-4 is just above.
+    test_energies = [1.0e-9, 1.0e-6, 5.0e-4]
+
+    solver_loose = build_solver(0, accuracy=A_LOOSE)
+    solver_tight = build_solver(0, accuracy=A_TIGHT)
+
+    failures = 0
+    max_rel = 0.0
+    for E in test_energies:
+        cs_loose = solver_loose.compute(E, 2)
+        cs_tight = solver_tight.compute(E, 2)
+        for ell, (q_loose, q_tight) in enumerate(zip(cs_loose, cs_tight), 1):
+            rel = abs(q_loose - q_tight) / abs(q_tight)
+            max_rel = max(max_rel, rel)
+            if rel >= A_LOOSE:
+                failures += 1
+                print(f"  [FAIL] E={E:.2e} Q^({ell})  "
+                      f"loose={q_loose:.4f} tight={q_tight:.4f} "
+                      f"rel diff={rel:.2e}")
+
+    status = "PASS" if failures == 0 else "FAIL"
+    print(f"  [{status}] max relative change = {max_rel:.2e} "
+          f"(tolerance {A_LOOSE:.0e}); {len(test_energies) * 2} (E, ell) checks")
+    return failures
+
+
 def test_mult_orb_regions():
     """Check that PC_mult_orb.in yields the 4 orbiting regions Fortran finds.
 
@@ -171,6 +213,10 @@ if __name__ == "__main__":
 
     print("Turning-point residual (grid of E, b):")
     total_failures += test_turning_point_residual()
+    print()
+
+    print("Accuracy convergence (angle=0, accuracy 1e-3 vs 1e-4):")
+    total_failures += test_accuracy_convergence()
     print()
 
     print("Multi-orbit regions (PC_mult_orb.in):")
