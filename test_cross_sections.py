@@ -15,6 +15,9 @@ Also includes:
 - chi-independent check that solver.deflection_angle agrees with a from-
   scratch r-space recomputation that shares no change-of-variables with
   the production code (internal consistency, no Fortran involved);
+- Langevin-scaling check on a synthetic 12-4 potential: Q^(1)(E) * sqrt(E)
+  should approach a constant at low E because the long-range -C/r^4 tail
+  forces Q^(1) ~ sqrt(C/E).  Independent of Fortran;
 - multi-orbit region count check against PC_mult_orb.in (must detect the
   4 disjoint orbiting energy regions Fortran finds).
 """
@@ -237,6 +240,46 @@ def test_chi_independent():
     return failures
 
 
+def test_langevin_scaling():
+    """Internal consistency: on a synthetic 12-4 potential, Q^(1)(E)*sqrt(E)
+    is approximately constant at low E (Langevin scaling).
+
+    For V(r) -> -C/r^4 at large r, the classical low-E cross section is
+    dominated by orbiting trajectories with critical impact parameter
+    b_0 = (4C/E)^{1/4}, so Q^(1)(E) ~ b_0^2 ~ sqrt(C/E).  The synthetic
+    potential is built fresh here -- this test depends on no Fortran
+    reference value.
+    """
+    # 12-4 model: V(r) = (1/2) r^-12 - (3/2) r^-4 in atomic units (epsilon=1,
+    # r0=1).  Well depth -1 at r=1; long-range C/r^4 coefficient C = 3/2.
+    C_LONG = 1.5
+    TOLERANCE = 0.05   # 5% relative variation across the test energies
+
+    r_grid = np.logspace(np.log10(0.3), np.log10(30.0), 60)
+    V_grid = 0.5 * r_grid**(-12) - 1.5 * r_grid**(-4)
+    pot = Potential(r_grid.tolist(), V_grid.tolist(), -4)
+
+    orbit_list, ED = orbiting_scan(pot, 1e-10, 4, C_LONG)
+    regions = orbiting_regions(orbit_list)
+    solver = CrossSectionSolver(pot, orbit_list, regions, 4, C_LONG, 0.001, ED=ED)
+
+    test_energies = [1.0e-7, 1.0e-6, 1.0e-5]
+    products = []
+    for E in test_energies:
+        cs = solver.compute(E, 1)
+        products.append(cs[0] * np.sqrt(E))
+
+    p_max, p_min = max(products), min(products)
+    rel_var = (p_max - p_min) / p_min
+
+    status = "PASS" if rel_var < TOLERANCE else "FAIL"
+    print(f"  [{status}] Q^(1)*sqrt(E) on synthetic 12-4 potential "
+          f"(rel variation {rel_var:.2%}, tolerance {TOLERANCE:.0%}):")
+    for E, p in zip(test_energies, products):
+        print(f"          E={E:.0e}  Q^(1)*sqrt(E) = {p:.4f}")
+    return 0 if status == "PASS" else 1
+
+
 def test_mult_orb_regions():
     """Check that PC_mult_orb.in yields the 4 orbiting regions Fortran finds.
 
@@ -285,6 +328,10 @@ if __name__ == "__main__":
 
     print("Independent chi recomputation (angle=0, E > EC):")
     total_failures += test_chi_independent()
+    print()
+
+    print("Langevin scaling on synthetic 12-4 potential:")
+    total_failures += test_langevin_scaling()
     print()
 
     print("Multi-orbit regions (PC_mult_orb.in):")
