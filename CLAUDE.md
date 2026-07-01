@@ -4,7 +4,12 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-This is a computational physics project that computes **transport cross-sections from intermolecular potentials** with rotational (angular) dependence. The main workflow lives in a single Jupyter notebook (`transport_from_potental.ipynb`) and a set of input data files (`PC.in.XXX`).
+This is a computational physics project that computes **transport cross-sections from intermolecular potentials** with rotational (angular) dependence. The workflow lives in plain `.py` modules and a set of input data files (`PC.in.XXX`):
+
+- `transport_from_potential.py` — single-angle pipeline: 1D `Potential` class (short/long extrapolation + cubic spline in r), turning-point solve, deflection angle, and cross-section integral.
+- `potential_surface.py` *(added for angle-resolved work)* — 2D `PotentialSurface(V(r, phi))` class over the full angle grid.
+- `v_tilde.py` *(added for angle-resolved work)* — the effective 1D potential V̂tilde(r) that collapses the angle-resolved deflection integral back into the atom–atom form so `CrossSectionSolver` can be reused unchanged.
+- `prototypes/` — earlier 2D-interpolation prototype and its test harness, kept for reference (not part of the production pipeline).
 
 The physical pipeline is:
 1. Read angle-dependent pair potentials V(r, phi) from input files
@@ -22,10 +27,14 @@ Files are named `PC.in.XXX` where `XXX` is the angle in degrees (000 through 180
 
 ## Running
 
-Requires Python 3 with: `numpy`, `scipy`, `matplotlib`. Run with Jupyter:
+Requires Python 3 with: `numpy`, `scipy`, `matplotlib`. Run the modules and tests directly:
 
 ```
-jupyter notebook transport_from_potental.ipynb
+python transport_from_potential.py          # single-angle demo driver
+pytest test_cross_sections.py               # single-angle regression tests
+pytest test_potential_surface.py            # 2D V(r, phi) tests (angle-resolved)
+pytest test_v_tilde.py                      # V̂tilde construction tests (angle-resolved)
+python prototypes/test_interpolation_2d.py  # prototype angular-interp comparison
 ```
 
 ## Key Physics / Code Concepts
@@ -36,6 +45,8 @@ jupyter notebook transport_from_potental.ipynb
 - **Orbiting detection**: Checks where effective potential has a maximum (centrifugal barrier), indicating classical orbiting. Uses conditions on V, V', V'' at separation r
 - **Deflection angle integral**: Uses substitution w = b/r to transform the integral to finite limits, then numerical quadrature (trapezoidal rule on uniform grid)
 - **Cross-section integral**: Split into [0,1] and [1, infinity) pieces; the high-b tail uses an approximation
+- **Angular symmetry**: `PotentialSurface` takes a required `symmetry` argument. `"heteronuclear"` expects data on [0°, 180°]; `"homonuclear"` expects data on [0°, 90°]. The class handles folding φ back into the canonical range internally.
+- **V̂tilde construction**: For angle-resolved collisions, `v_tilde.build_collision_frame(...)` sets up a gauge-fixed frame at closest approach (**r_m** along ẑ, **v_m** along x̂; ℓ̂_m and **L** parametrized by physical angles ψ and α_L) and `make_v_tilde(surface, frame)` returns a 1D closure that plugs into the existing single-angle `CrossSectionSolver`.
 
 ## Numerical Considerations
 
