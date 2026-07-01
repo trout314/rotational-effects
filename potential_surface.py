@@ -19,9 +19,9 @@ Two angular-interpolation methods are supported:
   `Potential.deriv` directly, not a spline in r.
 
 Both methods expose the same API: `V(r, φ)`, `dV_dr(r, φ)`, `dV_dphi(r, φ)`,
-`V_at_r(r, phi_array)`. Angles φ are in **degrees**; `dV_dphi` returns
-∂V/∂φ in **radians⁻¹** (i.e. per-radian), matching the physics convention
-in `v_tilde`.
+`dV_dphi2(r, φ)`, `V_at_r(r, phi_array)`. Angles φ are in **degrees**;
+`dV_dphi` returns ∂V/∂φ in **radians⁻¹** and `dV_dphi2` returns ∂²V/∂φ² in
+**radians⁻²**, matching the physics convention in `v_tilde`.
 """
 
 from __future__ import annotations
@@ -296,6 +296,36 @@ class PotentialSurface:
         V_ell_deriv = legder(V_ell)
         phi_rad = np.radians(phi_folded)
         return float(-np.sin(phi_rad) * legval(np.cos(phi_rad), V_ell_deriv))
+
+    def dV_dphi2(self, r, phi):
+        """∂²V/∂φ² at (r, φ), in radians⁻². Input φ in degrees.
+
+        For `radial_first`, the second derivative of the angular cubic
+        spline in φ_deg, rescaled by (180/π)² to convert to per-radian².
+
+        For `legendre`, uses the closed-form second derivative of
+            V(r, φ) = Σ_ℓ V_ℓ(r) · P_ℓ(cos φ)
+        with respect to φ:
+            ∂²V/∂φ² = -cos(φ) · Σ_ℓ V_ℓ · P_ℓ'(cos φ)
+                      + sin²(φ) · Σ_ℓ V_ℓ · P_ℓ''(cos φ),
+        obtained by differentiating -sin(φ)·Σ V_ℓ P_ℓ'(cos φ) once more
+        with respect to φ.
+        """
+        phi_folded = self._fold(phi)
+        if self.method == "radial_first":
+            spline = self._get_angular_spline(r, "V")
+            deriv2_per_deg2 = float(spline(phi_folded, 2))
+            return deriv2_per_deg2 * (180.0 / np.pi) ** 2
+        # legendre
+        V_ell = self._legendre_project(self._get_grid(r, "V"))
+        V_ell_d1 = legder(V_ell)
+        V_ell_d2 = legder(V_ell_d1)
+        phi_rad = np.radians(phi_folded)
+        cos_phi = np.cos(phi_rad)
+        sin_phi = np.sin(phi_rad)
+        term1 = -cos_phi * legval(cos_phi, V_ell_d1)
+        term2 = sin_phi * sin_phi * legval(cos_phi, V_ell_d2)
+        return float(term1 + term2)
 
     def V_at_r(self, r, phi_array):
         """Vectorized V(r, φ) over an array of φ (degrees) at fixed r."""

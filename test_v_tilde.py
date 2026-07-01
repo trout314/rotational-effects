@@ -449,20 +449,69 @@ def test_analytic_deriv_sweep(real_surface):
                                                     rel=1e-3, abs=1e-10)
 
 
-def test_analytic_deriv_falls_back_near_rm(real_surface):
-    """Inside the FD-fallback window the analytic path returns forward FD,
-    which must be finite and match the direct forward-FD computation."""
+def test_analytic_deriv_uses_closed_form_limit_at_rm(real_surface):
+    """At r = r_m the analytic path returns the closed-form right-limit
+        V̂tilde'(r_m⁺) = ∂ᵣV(r_m, φ_m)
+                        + (2·(dφ/dt|ₘ)²·r_m / (3·b_coef)) · ∂²V/∂φ²(r_m, φ_m).
+    Must be finite and match a from-scratch evaluation of that formula."""
     frame = build_collision_frame(
         real_surface, epsilon=1e-6, b=6.0, phi_m=np.pi / 3,
         psi=0.4, L_mag=1e-3, alpha_L=0.9,
         mu_ij=1000.0, mu_i=1000.0, ell_len=2.0)
     V = Vtilde(real_surface, frame, derivative="analytic")
-    r = frame.r_m       # exactly at r_m
-    result = V.deriv(r)
+    result = V.deriv(frame.r_m)
     assert np.isfinite(result)
-    h = V.h
-    expected_forward_fd = (V(r + h) - V(r)) / h
-    assert result == pytest.approx(expected_forward_fd, rel=1e-14, abs=1e-14)
+
+    phi_m_deg = np.degrees(frame.phi_m)
+    b_coef = frame.v_m ** 2 - frame.r_m * frame.dVdr_at_m / frame.mu_ij
+    d2Vdphi2 = real_surface.dV_dphi2(frame.r_m, phi_m_deg)
+    expected = (frame.dVdr_at_m
+                + (2.0 * frame.dphidt_m ** 2 * frame.r_m / (3.0 * b_coef))
+                * d2Vdphi2)
+    assert result == pytest.approx(expected, rel=1e-14, abs=1e-14)
+
+
+def test_analytic_deriv_at_rm_beats_forward_fd(real_surface):
+    """The analytic limit at r_m should be materially more accurate than
+    forward FD (which the previous implementation used). Compare both
+    against a Richardson-extrapolated FD as a truth proxy."""
+    frame = build_collision_frame(
+        real_surface, epsilon=1e-6, b=6.0, phi_m=np.pi / 3,
+        psi=0.4, L_mag=1e-3, alpha_L=0.9,
+        mu_ij=1000.0, mu_i=1000.0, ell_len=2.0)
+    V = Vtilde(real_surface, frame, derivative="analytic")
+
+    analytic = V.deriv(frame.r_m)
+    # Two-step Richardson extrapolation of the forward FD:
+    h1 = 1e-4 * frame.r_m
+    h2 = h1 / 2.0
+    fd1 = (V(frame.r_m + h1) - V(frame.r_m)) / h1
+    fd2 = (V(frame.r_m + h2) - V(frame.r_m)) / h2
+    truth = 2.0 * fd2 - fd1  # cancels the O(h) term
+    # Analytic should match truth much more tightly than fd1 does.
+    err_analytic = abs(analytic - truth)
+    err_fd = abs(fd1 - truth)
+    assert err_analytic < err_fd, (
+        f"analytic error {err_analytic:.3e} not smaller than "
+        f"forward-FD error {err_fd:.3e}")
+
+
+def test_analytic_deriv_continuous_across_threshold(real_surface):
+    """Right at the threshold (Δr just above vs just below r_m_limit),
+    the analytic result must not jump — the general formula converges
+    to the limit as Δr → 0."""
+    frame = build_collision_frame(
+        real_surface, epsilon=1e-6, b=6.0, phi_m=np.pi / 3,
+        psi=0.4, L_mag=1e-3, alpha_L=0.9,
+        mu_ij=1000.0, mu_i=1000.0, ell_len=2.0)
+    V = Vtilde(real_surface, frame, derivative="analytic")
+    threshold = V._rm_limit_threshold
+    # Just inside: uses limit formula
+    val_inside = V.deriv(frame.r_m + 0.5 * threshold)
+    # Just outside: uses general formula
+    val_outside = V.deriv(frame.r_m + 5.0 * threshold)
+    # Both should agree to at most a few ULPs on the underlying values.
+    assert val_inside == pytest.approx(val_outside, rel=1e-6, abs=1e-14)
 
 
 def test_analytic_isotropic_matches_1d(isotropic_surface):

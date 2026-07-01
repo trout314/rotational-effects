@@ -337,6 +337,28 @@ def test_dV_dphi_zero_at_endpoints_radial_first(hetero_surface):
 
 
 # ---------------------------------------------------------------------------
+# dV_dphi2 (both methods)
+# ---------------------------------------------------------------------------
+
+def test_dV_dphi2_matches_central_fd_on_dV_dphi_radial_first(hetero_surface):
+    """∂²V/∂φ² should match a central finite difference on ∂V/∂φ (both
+    quantities are in radians⁻¹ and radians⁻²).
+
+    Uses off-knot φ values — the underlying angular cubic spline is only
+    C² so ∂³V/∂φ³ has jumps at data knots (10° apart), which show up as
+    small extra error in the FD reference near those points."""
+    r = 6.0
+    h_rad = 1e-4
+    h_deg = np.degrees(h_rad)
+    for phi in [25.0, 55.0, 95.0, 135.0]:
+        analytic = hetero_surface.dV_dphi2(r, phi)
+        fd = ((hetero_surface.dV_dphi(r, phi + h_deg)
+               - hetero_surface.dV_dphi(r, phi - h_deg))
+              / (2.0 * h_rad))
+        assert analytic == pytest.approx(fd, rel=1e-3, abs=1e-14)
+
+
+# ---------------------------------------------------------------------------
 # Legendre method
 # ---------------------------------------------------------------------------
 
@@ -419,6 +441,18 @@ def test_legendre_dV_dphi_matches_central_fd(hetero_surface_legendre):
         analytic = hetero_surface_legendre.dV_dphi(r, phi)
         fd = ((hetero_surface_legendre.V(r, phi + h_deg)
                - hetero_surface_legendre.V(r, phi - h_deg))
+              / (2.0 * h_rad))
+        assert analytic == pytest.approx(fd, rel=1e-4, abs=1e-14)
+
+
+def test_legendre_dV_dphi2_matches_central_fd(hetero_surface_legendre):
+    r = 6.0
+    h_rad = 1e-4
+    h_deg = np.degrees(h_rad)
+    for phi in [20.0, 45.0, 90.0, 135.0]:
+        analytic = hetero_surface_legendre.dV_dphi2(r, phi)
+        fd = ((hetero_surface_legendre.dV_dphi(r, phi + h_deg)
+               - hetero_surface_legendre.dV_dphi(r, phi - h_deg))
               / (2.0 * h_rad))
         assert analytic == pytest.approx(fd, rel=1e-4, abs=1e-14)
 

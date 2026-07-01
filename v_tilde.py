@@ -328,12 +328,16 @@ class Vtilde:
         self.frame = frame
         self.h = fd_step_fraction * frame.r_m
         self.derivative = derivative
-        # Analytic dΔt/dΔr diverges as Δr → 0 (square-root singularity of
-        # the trajectory in radial displacement). Use forward FD when
-        # Δr < this threshold; forward FD gives the physical right-limit
-        # derivative at r_m, which is what CrossSectionSolver.deflection_angle
-        # uses in the deflection-integrand normalization.
-        self._analytic_fd_threshold = 5.0 * self.h
+        # The analytic V̂tilde'(r) has a removable singularity at r_m: the
+        # divergence of dΔt/dΔr ∝ 1/√Δr is cancelled by the vanishing of
+        # (∂ᵩV(φ_m+Δφ) - ∂ᵩV(φ_m-Δφ)) ∝ √Δr. For |Δr| below this
+        # threshold, we return the closed-form right-limit
+        #     V̂tilde'(r_m+) = ∂ᵣV(r_m, φ_m)
+        #                    + (2·(dφ/dt|ₘ)²·r_m / (3b)) · ∂²V/∂φ²(r_m, φ_m)
+        # which requires surface.dV_dphi2. The threshold is chosen far
+        # below any reasonable FD step but well above CrossSectionSolver's
+        # brentq turning-point tolerance (~1e-14·r_m).
+        self._rm_limit_threshold = 1.0e-10 * frame.r_m
         # Expose the same shape as `Potential` for CrossSectionSolver.
         self.rmin = min(p.rmin for p in surface.potentials)
         self.rmax = max(p.rmax for p in surface.potentials)
@@ -369,15 +373,16 @@ class Vtilde:
             V̂tilde'(r) = ⅓ Σ_s ∂ᵣV(r, φ_m + s·Δφ)
                        + (dΔφ/dr / 3) · [∂ᵩV(r, φ_m+Δφ) - ∂ᵩV(r, φ_m−Δφ)],
 
-        with dΔφ/dr = (dφ/dt|ₘ) · (dΔt/dΔr).
+        with dΔφ/dr = (dφ/dt|ₘ) · (dΔt/dΔr). At r = r_m the two factors of
+        the angular term are respectively divergent and vanishing; the
+        removable-singularity limit is applied instead (see
+        `_deriv_analytic_limit_at_rm`).
         """
         f = self.frame
         delta_r = r - f.r_m
 
-        # Forward-FD fallback near r_m (where dΔt/dΔr → ∞).
-        if delta_r < self._analytic_fd_threshold:
-            h = self.h
-            return (self(r + h) - self(r)) / h
+        if abs(delta_r) < self._rm_limit_threshold:
+            return self._deriv_analytic_limit_at_rm()
 
         dt, ddt_ddr = delta_t_and_deriv_of_delta_r(
             delta_r, f.r_m, f.v_m, f.dVdr_at_m, f.mu_ij)
@@ -399,6 +404,24 @@ class Vtilde:
         angular_term = (dphi_ddr / 3.0) * (dVdphi_plus - dVdphi_minus)
 
         return dVdr_avg + angular_term
+
+    def _deriv_analytic_limit_at_rm(self):
+        """Closed-form right-limit of V̂tilde'(r) as r → r_m⁺.
+
+        Working out the limit of the chain-rule formula (both factors of
+        the angular term have leading √Δr behaviour that cancels):
+            V̂tilde'(r_m⁺) = ∂ᵣV(r_m, φ_m)
+                            + (2·(dφ/dt|ₘ)²·r_m / (3·b_coef)) · ∂²V/∂φ²(r_m, φ_m)
+        where b_coef = v_m² − r_m·(dV/dr)|_m/μ_ij is the coefficient of
+        Δt² in the quadratic that defines Δt(Δr).
+        """
+        f = self.frame
+        b_coef = f.v_m ** 2 - f.r_m * f.dVdr_at_m / f.mu_ij
+        phi_m_deg = np.degrees(f.phi_m)
+        d2Vdphi2 = self.surface.dV_dphi2(f.r_m, phi_m_deg)
+        curvature_term = (2.0 * f.dphidt_m ** 2 * f.r_m
+                          / (3.0 * b_coef)) * d2Vdphi2
+        return f.dVdr_at_m + curvature_term
 
     def deriv2(self, r):
         # FD-on-FD (independent of derivative mode).
