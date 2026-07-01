@@ -450,3 +450,88 @@ def test_legendre_default_n_terms(hetero_data):
     surf = PotentialSurface(hetero_data, LONG_RANGE_POW,
                              symmetry="heteronuclear", method="legendre")
     assert surf.n_legendre_terms == len(surf.angles_deg)
+
+
+# ---------------------------------------------------------------------------
+# Homonuclear even-ℓ enforcement
+# ---------------------------------------------------------------------------
+
+@pytest.fixture(scope="module")
+def homo_surface_legendre(hetero_data):
+    """A homonuclear PotentialSurface (data on [0°, 90°]) using the
+    legendre method with even-ℓ-only enforcement."""
+    homo_data = {a: hetero_data[a] for a in hetero_data if a <= 90.0}
+    return PotentialSurface(homo_data, LONG_RANGE_POW,
+                             symmetry="homonuclear", method="legendre")
+
+
+def test_homo_legendre_active_ells_are_even(homo_surface_legendre):
+    """The active ℓ list must be [0, 2, 4, ...]."""
+    ells = homo_surface_legendre._legendre_ells
+    assert np.all(ells % 2 == 0)
+    assert list(ells) == list(range(0, 2 * len(ells), 2))
+
+
+def test_homo_legendre_odd_coefficients_are_zero(homo_surface_legendre):
+    """The padded projection array must have exactly zero at every
+    odd-ℓ position."""
+    grid = homo_surface_legendre._get_grid(6.0, "V")
+    V_padded = homo_surface_legendre._legendre_project(grid)
+    odd_positions = V_padded[1::2]
+    assert np.allclose(odd_positions, 0.0, atol=1e-15)
+
+
+def test_homo_legendre_enforces_reconstruction_parity(homo_surface_legendre):
+    """The raw Legendre reconstruction must satisfy V(r, π−φ) = V(r, φ)
+    exactly (independent of the surface's fold rule). We evaluate legval
+    at cos(φ) and cos(π−φ) = −cos(φ) directly using the projected
+    coefficient array."""
+    from numpy.polynomial.legendre import legval
+    grid = homo_surface_legendre._get_grid(6.0, "V")
+    V_padded = homo_surface_legendre._legendre_project(grid)
+    for phi_deg in [10.0, 30.0, 45.0, 60.0, 80.0]:
+        cos_a = np.cos(np.radians(phi_deg))
+        cos_b = -cos_a
+        assert legval(cos_a, V_padded) == pytest.approx(
+            legval(cos_b, V_padded), abs=1e-14)
+
+
+def test_homo_legendre_matches_1d_at_grid(homo_surface_legendre):
+    """With n_terms = n_angles even Legendre polynomials, the projection
+    is an exact interpolation at every grid angle (10 basis functions on
+    10 samples)."""
+    for j, angle in enumerate(homo_surface_legendre.angles_deg):
+        pot_1d = homo_surface_legendre.potentials[j]
+        for r in [4.5, 6.0, 8.0]:
+            assert (homo_surface_legendre.V(r, angle)
+                    == pytest.approx(pot_1d(r), abs=1e-12))
+
+
+def test_homo_legendre_dV_dphi_matches_fd(homo_surface_legendre):
+    r = 6.0
+    h_rad = 1e-4
+    h_deg = np.degrees(h_rad)
+    for phi in [10.0, 30.0, 45.0, 70.0]:
+        analytic = homo_surface_legendre.dV_dphi(r, phi)
+        fd = ((homo_surface_legendre.V(r, phi + h_deg)
+               - homo_surface_legendre.V(r, phi - h_deg))
+              / (2.0 * h_rad))
+        assert analytic == pytest.approx(fd, rel=1e-4, abs=1e-14)
+
+
+def test_homo_legendre_dV_dphi_zero_at_90(homo_surface_legendre):
+    """Even-ℓ parity forces ∂V/∂φ = 0 at φ = 90° — every P_ℓ(cos φ) with
+    even ℓ has a critical point at cos(90°) = 0."""
+    assert homo_surface_legendre.dV_dphi(6.0, 90.0) == pytest.approx(
+        0.0, abs=1e-14)
+
+
+def test_homo_legendre_fold_and_reconstruction_agree(homo_surface_legendre):
+    """V(r, 130°) folds via 180°−φ to V(r, 50°) at the surface level; on
+    top of that, the Legendre reconstruction is itself parity-symmetric.
+    Both routes must give the same value."""
+    r = 6.0
+    for phi_deg in [130.0, 100.0, 170.0]:
+        v_fold = homo_surface_legendre.V(r, phi_deg)
+        v_ref = homo_surface_legendre.V(r, 180.0 - phi_deg)
+        assert v_fold == pytest.approx(v_ref, abs=1e-14)

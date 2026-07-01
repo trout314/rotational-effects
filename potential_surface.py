@@ -81,9 +81,9 @@ class PotentialSurface:
     conditions dV/dφ = 0 at each endpoint, matching the reflection
     symmetries V(r, −φ) = V(r, φ) at 0° and (for heteronuclear)
     V(r, 180°+δ) = V(r, 180°−δ) at 180°; homonuclear adds the same at 90°.
-    For `legendre`, symmetry-respecting projection would restrict the
-    homonuclear expansion to even-ℓ terms; this refinement is not yet
-    implemented (see the plan for Phase 2b).
+    For `legendre` with `symmetry="homonuclear"`, the expansion is
+    restricted to even-ℓ Legendre polynomials only, which enforces
+    V(r, π−φ) = V(r, φ) exactly (P_ℓ(−x) = (−1)^ℓ P_ℓ(x)).
     """
 
     _CANONICAL_MAX = {"heteronuclear": 180.0, "homonuclear": 90.0}
@@ -152,13 +152,26 @@ class PotentialSurface:
                 f"got {n_terms}.")
         self.n_legendre_terms = n_terms
 
-        # Build projection matrix P[j, ℓ] = P_ℓ(cos φ_j).
+        # Active ℓ indices. For homonuclear V(r, π−φ) = V(r, φ), only
+        # even-ℓ Legendre polynomials contribute (P_ℓ(−x) = (−1)^ℓ P_ℓ(x)),
+        # so we restrict the basis accordingly. For heteronuclear we
+        # use every ℓ up to n_terms.
+        if self.symmetry == "homonuclear":
+            self._legendre_ells = 2 * np.arange(n_terms, dtype=int)
+        else:
+            self._legendre_ells = np.arange(n_terms, dtype=int)
+        # Padding length: highest ℓ used + 1. `legval` / `legder` need
+        # a coefficient array indexed by ℓ, so we store the projected
+        # coefficients padded with zeros at the unused (odd) positions.
+        self._legendre_pad_length = int(self._legendre_ells[-1]) + 1
+
+        # Projection matrix P[j, k] = P_{ell[k]}(cos φ_j).
         cos_phis = np.cos(np.radians(self.angles_deg))
         P_matrix = np.zeros((n_angles, n_terms))
-        for ell in range(n_terms):
+        for k, ell in enumerate(self._legendre_ells):
             coef = np.zeros(ell + 1)
             coef[ell] = 1.0
-            P_matrix[:, ell] = legval(cos_phis, coef)
+            P_matrix[:, k] = legval(cos_phis, coef)
 
         # Pseudoinverse gives the least-squares projection weights.
         # For n_terms == n_angles this is the plain inverse (exact
@@ -230,9 +243,14 @@ class PotentialSurface:
 
     def _legendre_project(self, grid):
         """`legendre`: project a per-angle value array onto the Legendre
-        basis. Returns the coefficient vector V_ℓ, shape (n_legendre_terms,).
+        basis. Returns a coefficient array padded to length
+        `_legendre_pad_length` with zeros at unused (odd, for homonuclear)
+        positions — the form `legval` / `legder` expects.
         """
-        return self._legendre_weights @ grid
+        V_active = self._legendre_weights @ grid  # shape (n_terms,)
+        V_padded = np.zeros(self._legendre_pad_length)
+        V_padded[self._legendre_ells] = V_active
+        return V_padded
 
     # ------------------------------------------------------------------
     # Public API
