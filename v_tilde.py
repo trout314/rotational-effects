@@ -124,6 +124,47 @@ def delta_t_of_delta_r(delta_r, r_m, v_m, dVdr_m, mu_ij):
     return np.sqrt(u) if u > 0.0 else 0.0
 
 
+def delta_t_and_deriv_of_delta_r(delta_r, r_m, v_m, dVdr_m, mu_ij):
+    """Return (Δt, dΔt/dΔr) at the given Δr.
+
+    dΔt/dΔr is obtained by implicit differentiation of the quadratic
+    A·u² + b·u − C(Δr) = 0 in u = Δt². With C(Δr) = Δr·(2·r_m+Δr) and
+    the identity 2·A·u + b = √disc for the positive root, we get
+
+        dΔt/dΔr = C'(Δr) / (2·Δt·√disc),
+
+    where C'(Δr) = 2·(r_m + Δr). This diverges as Δt → 0 (i.e., Δr → 0);
+    callers must guard against evaluation at Δr = 0.
+    """
+    f = dVdr_m / (2.0 * mu_ij * r_m)
+    A = (r_m * f) ** 2
+    b = v_m ** 2 - 2.0 * (r_m ** 2) * f
+    C_star = delta_r * (2.0 * r_m + delta_r)
+    dCdΔr = 2.0 * (r_m + delta_r)
+
+    if A < DENOM_FLOOR:
+        if abs(b) < DENOM_FLOOR:
+            return 0.0, 0.0
+        u = C_star / b
+        if u <= 0.0:
+            return 0.0, 0.0
+        dt = np.sqrt(u)
+        return dt, (dCdΔr / b) / (2.0 * dt)
+
+    disc = b * b + 4.0 * A * C_star
+    sqrt_disc = np.sqrt(max(disc, 0.0))
+    if b >= 0.0:
+        u = 2.0 * C_star / (b + sqrt_disc)
+    else:
+        u = (-b + sqrt_disc) / (2.0 * A)
+    if u <= 0.0:
+        return 0.0, 0.0
+    dt = np.sqrt(u)
+    if sqrt_disc < DENOM_FLOOR:
+        return dt, 0.0
+    return dt, (dCdΔr / sqrt_disc) / (2.0 * dt)
+
+
 def _find_turning_point_slice(surface, epsilon, b, phi_m_deg):
     """Solve V(r, φ_m) + ε·b²/r² = ε for the outermost r.
 
@@ -258,14 +299,41 @@ class Vtilde:
 
     Exposes __call__, `deriv`, `deriv2`, `veff`, `rmin`, `rmax`,
     `long_range_pow` so it drops into `CrossSectionSolver` in place of
-    the 1D `Potential`. `deriv` and `deriv2` are Phase-1 centered
-    finite differences (see Q3 in the plan).
+    the 1D `Potential`.
+
+    Parameters
+    ----------
+    surface : PotentialSurface
+    frame : CollisionFrame
+    fd_step_fraction : float
+        h = fd_step_fraction · r_m is the finite-difference step used
+        by the FD derivative paths.
+    derivative : {"fd", "analytic"}
+        `"fd"` (default): centered finite difference on V̂tilde itself —
+        Phase-1 behaviour, always applicable. `"analytic"`: chain-rule
+        formula that consumes surface.dV_dr and surface.dV_dphi, with a
+        forward-FD fallback in a small window around r_m where the
+        analytic dΔt/dΔr diverges as 1/√Δr.
     """
 
-    def __init__(self, surface, frame, fd_step_fraction=1.0e-4):
+    _SUPPORTED_DERIVATIVES = ("fd", "analytic")
+
+    def __init__(self, surface, frame, fd_step_fraction=1.0e-4,
+                 derivative="fd"):
+        if derivative not in self._SUPPORTED_DERIVATIVES:
+            raise ValueError(
+                f"derivative must be one of {self._SUPPORTED_DERIVATIVES}, "
+                f"got {derivative!r}")
         self.surface = surface
         self.frame = frame
         self.h = fd_step_fraction * frame.r_m
+        self.derivative = derivative
+        # Analytic dΔt/dΔr diverges as Δr → 0 (square-root singularity of
+        # the trajectory in radial displacement). Use forward FD when
+        # Δr < this threshold; forward FD gives the physical right-limit
+        # derivative at r_m, which is what CrossSectionSolver.deflection_angle
+        # uses in the deflection-integrand normalization.
+        self._analytic_fd_threshold = 5.0 * self.h
         # Expose the same shape as `Potential` for CrossSectionSolver.
         self.rmin = min(p.rmin for p in surface.potentials)
         self.rmax = max(p.rmax for p in surface.potentials)
@@ -286,10 +354,54 @@ class Vtilde:
         return float(np.mean(vals))
 
     def deriv(self, r):
+        if self.derivative == "analytic":
+            return self._deriv_analytic(r)
+        # "fd": centered finite difference.
         h = self.h
         return (self(r + h) - self(r - h)) / (2.0 * h)
 
+    def _deriv_analytic(self, r):
+        """Analytic chain-rule V̂tilde'(r).
+
+        V̂tilde(r) = ⅓ Σ_s V(r, φ_m + s·Δφ(r)) with s ∈ {−1, 0, +1}.
+        d/dr [V(r, φ_m + s·Δφ)] = ∂ᵣV + s·(dΔφ/dr)·∂ᵩV. Summing:
+
+            V̂tilde'(r) = ⅓ Σ_s ∂ᵣV(r, φ_m + s·Δφ)
+                       + (dΔφ/dr / 3) · [∂ᵩV(r, φ_m+Δφ) - ∂ᵩV(r, φ_m−Δφ)],
+
+        with dΔφ/dr = (dφ/dt|ₘ) · (dΔt/dΔr).
+        """
+        f = self.frame
+        delta_r = r - f.r_m
+
+        # Forward-FD fallback near r_m (where dΔt/dΔr → ∞).
+        if delta_r < self._analytic_fd_threshold:
+            h = self.h
+            return (self(r + h) - self(r)) / h
+
+        dt, ddt_ddr = delta_t_and_deriv_of_delta_r(
+            delta_r, f.r_m, f.v_m, f.dVdr_at_m, f.mu_ij)
+        dphi = f.dphidt_m * dt
+        dphi_ddr = f.dphidt_m * ddt_ddr
+
+        phi_m_deg = np.degrees(f.phi_m)
+        dphi_deg = np.degrees(dphi)
+        phi_minus = phi_m_deg - dphi_deg
+        phi_center = phi_m_deg
+        phi_plus = phi_m_deg + dphi_deg
+
+        dVdr_avg = (self.surface.dV_dr(r, phi_minus)
+                    + self.surface.dV_dr(r, phi_center)
+                    + self.surface.dV_dr(r, phi_plus)) / 3.0
+
+        dVdphi_plus = self.surface.dV_dphi(r, phi_plus)
+        dVdphi_minus = self.surface.dV_dphi(r, phi_minus)
+        angular_term = (dphi_ddr / 3.0) * (dVdphi_plus - dVdphi_minus)
+
+        return dVdr_avg + angular_term
+
     def deriv2(self, r):
+        # FD-on-FD (independent of derivative mode).
         h = self.h
         return (self(r + h) - 2.0 * self(r) + self(r - h)) / (h * h)
 
@@ -297,10 +409,11 @@ class Vtilde:
         return self(r) + r * self.deriv(r) / 2.0
 
 
-def make_v_tilde(surface, frame, fd_step_fraction=1.0e-4):
+def make_v_tilde(surface, frame, fd_step_fraction=1.0e-4, derivative="fd"):
     """Return a `Vtilde` closure over `surface` and `frame`.
 
-    Convenience factory; equivalent to `Vtilde(surface, frame,
-    fd_step_fraction=...)`.
+    Convenience factory; equivalent to
+    `Vtilde(surface, frame, fd_step_fraction=..., derivative=...)`.
     """
-    return Vtilde(surface, frame, fd_step_fraction=fd_step_fraction)
+    return Vtilde(surface, frame, fd_step_fraction=fd_step_fraction,
+                  derivative=derivative)

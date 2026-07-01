@@ -22,6 +22,7 @@ from v_tilde import (
     CollisionFrame,
     Vtilde,
     build_collision_frame,
+    delta_t_and_deriv_of_delta_r,
     delta_t_of_delta_r,
     make_v_tilde,
 )
@@ -380,3 +381,126 @@ def test_vtilde_reduces_to_single_angle_solver(real_surface):
         # turning-point solve step (used only through denom = 1 -
         # rm³·V'(rm)/(2 b² E)). Should be very close.
         assert chi_vt == pytest.approx(chi_1d, rel=1e-3, abs=1e-3)
+
+
+# ---------------------------------------------------------------------------
+# Phase 2: analytic Vtilde' vs FD
+# ---------------------------------------------------------------------------
+
+def test_delta_t_and_deriv_matches_fd():
+    """dΔt/dΔr from the analytic implicit differentiation must match a
+    central FD on Δt(Δr) for Δr away from 0 (where the analytic formula
+    has a √-singularity)."""
+    r_m, v_m, dVdr_m, mu_ij = 5.0, 0.5, 0.05, 2.0
+    for delta_r in [1e-2, 5e-2, 1e-1, 3e-1]:
+        _, ddt_analytic = delta_t_and_deriv_of_delta_r(
+            delta_r, r_m, v_m, dVdr_m, mu_ij)
+        h = 1e-6
+        ddt_fd = ((delta_t_of_delta_r(delta_r + h, r_m, v_m, dVdr_m, mu_ij)
+                   - delta_t_of_delta_r(delta_r - h, r_m, v_m, dVdr_m, mu_ij))
+                  / (2.0 * h))
+        assert ddt_analytic == pytest.approx(ddt_fd, rel=1e-6)
+
+
+def test_delta_t_and_deriv_diverges_at_zero():
+    """dΔt/dΔr diverges as 1/√Δr near Δr = 0 — check that a Δr small but
+    positive gives a large finite value proportional to 1/√Δr."""
+    r_m, v_m, dVdr_m, mu_ij = 5.0, 0.5, 0.05, 2.0
+    d1 = delta_t_and_deriv_of_delta_r(1e-6, r_m, v_m, dVdr_m, mu_ij)[1]
+    d4 = delta_t_and_deriv_of_delta_r(4e-6, r_m, v_m, dVdr_m, mu_ij)[1]
+    # d(Δr=1e-6) / d(Δr=4e-6) ≈ √4 = 2.
+    assert d1 / d4 == pytest.approx(2.0, rel=1e-3)
+
+
+def test_analytic_deriv_matches_fd_away_from_rm(real_surface):
+    """Away from r_m the analytic V̂tilde'(r) must match the central-FD
+    result — they compute the same derivative by different routes."""
+    frame = build_collision_frame(
+        real_surface, epsilon=1e-6, b=6.0, phi_m=np.pi / 3,
+        psi=0.4, L_mag=1e-3, alpha_L=0.9,
+        mu_ij=1000.0, mu_i=1000.0, ell_len=2.0)
+    V_fd = Vtilde(real_surface, frame, derivative="fd")
+    V_an = Vtilde(real_surface, frame, derivative="analytic")
+    # Sample well away from r_m so the analytic path is not in FD fallback.
+    for r in [frame.r_m + 1.0, frame.r_m + 3.0, frame.r_m + 8.0]:
+        assert V_an.deriv(r) == pytest.approx(V_fd.deriv(r), rel=1e-3,
+                                                abs=1e-10)
+
+
+def test_analytic_deriv_sweep(real_surface):
+    """Across a (b, φ_m, ψ, L, α_L) sweep, analytic V̂tilde' should track
+    central FD closely at every sample point away from r_m."""
+    rng = np.random.default_rng(0)
+    for _ in range(5):
+        phi_m = rng.uniform(0.1, np.pi - 0.1)
+        psi = rng.uniform(0.0, 2 * np.pi)
+        alpha_L = rng.uniform(0.0, 2 * np.pi)
+        L_mag = rng.uniform(1e-4, 1e-2)
+        b = rng.uniform(4.0, 10.0)
+        frame = build_collision_frame(
+            real_surface, epsilon=1e-6, b=b, phi_m=phi_m,
+            psi=psi, L_mag=L_mag, alpha_L=alpha_L,
+            mu_ij=1000.0, mu_i=1000.0, ell_len=2.0)
+        V_fd = Vtilde(real_surface, frame, derivative="fd")
+        V_an = Vtilde(real_surface, frame, derivative="analytic")
+        for delta_r in [1.0, 3.0, 6.0]:
+            r = frame.r_m + delta_r
+            assert V_an.deriv(r) == pytest.approx(V_fd.deriv(r),
+                                                    rel=1e-3, abs=1e-10)
+
+
+def test_analytic_deriv_falls_back_near_rm(real_surface):
+    """Inside the FD-fallback window the analytic path returns forward FD,
+    which must be finite and match the direct forward-FD computation."""
+    frame = build_collision_frame(
+        real_surface, epsilon=1e-6, b=6.0, phi_m=np.pi / 3,
+        psi=0.4, L_mag=1e-3, alpha_L=0.9,
+        mu_ij=1000.0, mu_i=1000.0, ell_len=2.0)
+    V = Vtilde(real_surface, frame, derivative="analytic")
+    r = frame.r_m       # exactly at r_m
+    result = V.deriv(r)
+    assert np.isfinite(result)
+    h = V.h
+    expected_forward_fd = (V(r + h) - V(r)) / h
+    assert result == pytest.approx(expected_forward_fd, rel=1e-14, abs=1e-14)
+
+
+def test_analytic_isotropic_matches_1d(isotropic_surface):
+    """In the isotropic limit V̂tilde = V, ∂ᵩV = 0, and the chain-rule
+    angular term vanishes. Analytic V̂tilde'(r) = ∂ᵣV(r, φ_m) exactly."""
+    frame = build_collision_frame(
+        isotropic_surface, epsilon=1e-6, b=6.0, phi_m=np.pi / 3,
+        psi=0.4, L_mag=1e-3, alpha_L=0.9,
+        mu_ij=1000.0, mu_i=1000.0, ell_len=2.0)
+    V = Vtilde(isotropic_surface, frame, derivative="analytic")
+    ref = isotropic_surface.potentials[9]
+    for r in [frame.r_m + 1.0, frame.r_m + 3.0, frame.r_m + 6.0]:
+        assert V.deriv(r) == pytest.approx(ref.deriv(r), rel=1e-12,
+                                             abs=1e-14)
+
+
+def test_vtilde_with_legendre_surface(real_surface, hetero_data=None):
+    """V̂tilde works end-to-end with a Legendre-based PotentialSurface."""
+    surf_leg = PotentialSurface(
+        {a: (list(real_surface.potentials[i].distances),
+             list(real_surface.potentials[i].energies))
+         for i, a in enumerate(real_surface.angles_deg)},
+        real_surface.long_range_pow, symmetry="heteronuclear",
+        method="legendre")
+    frame = build_collision_frame(
+        surf_leg, epsilon=1e-6, b=6.0, phi_m=np.pi / 3,
+        psi=0.4, L_mag=1e-3, alpha_L=0.9,
+        mu_ij=1000.0, mu_i=1000.0, ell_len=2.0)
+    V = Vtilde(surf_leg, frame, derivative="analytic")
+    r = frame.r_m + 2.0
+    assert np.isfinite(V(r))
+    assert np.isfinite(V.deriv(r))
+
+
+def test_analytic_bad_option_rejected(real_surface):
+    frame = build_collision_frame(
+        real_surface, epsilon=1e-6, b=6.0, phi_m=np.pi / 3,
+        psi=0.4, L_mag=1e-3, alpha_L=0.9,
+        mu_ij=1000.0, mu_i=1000.0, ell_len=2.0)
+    with pytest.raises(ValueError):
+        Vtilde(real_surface, frame, derivative="not_a_mode")

@@ -117,7 +117,18 @@ def test_bad_symmetry_rejected(hetero_data):
 def test_bad_method_rejected(hetero_data):
     with pytest.raises(NotImplementedError):
         PotentialSurface(hetero_data, LONG_RANGE_POW,
-                         symmetry="heteronuclear", method="legendre")
+                         symmetry="heteronuclear", method="not_a_method")
+
+
+def test_legendre_bad_n_terms_rejected(hetero_data):
+    with pytest.raises(ValueError):
+        PotentialSurface(hetero_data, LONG_RANGE_POW,
+                         symmetry="heteronuclear", method="legendre",
+                         n_legendre_terms=0)
+    with pytest.raises(ValueError):
+        PotentialSurface(hetero_data, LONG_RANGE_POW,
+                         symmetry="heteronuclear", method="legendre",
+                         n_legendre_terms=100)
 
 
 def test_heteronuclear_range_data_rejected_as_homonuclear(hetero_data):
@@ -296,3 +307,146 @@ def test_cache_invalidated_on_r_change(hetero_surface):
     hetero_surface.V(8.0, 30.0)
     second = hetero_surface._cache_V_spline
     assert first is not second
+
+
+# ---------------------------------------------------------------------------
+# dV_dphi (both methods)
+# ---------------------------------------------------------------------------
+
+def test_dV_dphi_matches_central_fd_radial_first(hetero_surface):
+    """∂V/∂φ (radians⁻¹) from PotentialSurface.dV_dphi must match a central
+    finite difference on V(r, φ) to ~O(h²) accuracy. Uses a mid-range r and
+    interior φ so we're away from the clamped-BC endpoints."""
+    r = 6.0
+    h_rad = 1e-4
+    h_deg = np.degrees(h_rad)
+    for phi in [20.0, 45.0, 90.0, 135.0]:
+        analytic = hetero_surface.dV_dphi(r, phi)
+        fd = ((hetero_surface.V(r, phi + h_deg)
+               - hetero_surface.V(r, phi - h_deg))
+              / (2.0 * h_rad))
+        assert analytic == pytest.approx(fd, rel=1e-5, abs=1e-14)
+
+
+def test_dV_dphi_zero_at_endpoints_radial_first(hetero_surface):
+    """Clamped-BC angular spline enforces dV/dφ = 0 at the canonical
+    endpoints."""
+    r = 6.0
+    assert hetero_surface.dV_dphi(r, 0.0) == pytest.approx(0.0, abs=1e-14)
+    assert hetero_surface.dV_dphi(r, 180.0) == pytest.approx(0.0, abs=1e-14)
+
+
+# ---------------------------------------------------------------------------
+# Legendre method
+# ---------------------------------------------------------------------------
+
+@pytest.fixture(scope="module")
+def hetero_surface_legendre(hetero_data):
+    """Full-rank Legendre projection (n_terms = n_angles) — exact
+    interpolation at every grid angle."""
+    return PotentialSurface(hetero_data, LONG_RANGE_POW,
+                            symmetry="heteronuclear", method="legendre")
+
+
+def test_legendre_exact_at_grid_angles(hetero_surface_legendre):
+    """With n_terms = n_angles the Legendre projection reproduces the
+    per-angle 1D `Potential` exactly at every grid angle for V and dV/dr."""
+    r_values = [4.0, 5.5, 6.0, 8.0, 12.0]
+    for j, angle in enumerate(hetero_surface_legendre.angles_deg):
+        pot_1d = hetero_surface_legendre.potentials[j]
+        for r in r_values:
+            assert (hetero_surface_legendre.V(r, angle)
+                    == pytest.approx(pot_1d(r), abs=1e-12))
+            assert (hetero_surface_legendre.dV_dr(r, angle)
+                    == pytest.approx(pot_1d.deriv(r), abs=1e-12))
+
+
+def test_legendre_short_range_extrapolation(hetero_surface_legendre):
+    """At r < r_min the per-angle short-range power laws apply. Because
+    the Legendre projection uses per-angle Potential.__call__ (which
+    handles short-range internally) and evaluates fresh at each r, no
+    V_ℓ(r) spline is trained on a bounded r-grid — the extrapolation is
+    always correct at grid angles."""
+    for j, angle in enumerate(hetero_surface_legendre.angles_deg):
+        pot_1d = hetero_surface_legendre.potentials[j]
+        r = 0.5 * pot_1d.rmin
+        assert (hetero_surface_legendre.V(r, angle)
+                == pytest.approx(pot_1d(r), rel=1e-10, abs=1e-14))
+
+
+def test_legendre_long_range_extrapolation(hetero_surface_legendre):
+    for j, angle in enumerate(hetero_surface_legendre.angles_deg):
+        pot_1d = hetero_surface_legendre.potentials[j]
+        r = 3.0 * pot_1d.rmax
+        assert (hetero_surface_legendre.V(r, angle)
+                == pytest.approx(pot_1d(r), rel=1e-8, abs=1e-14))
+
+
+def test_legendre_and_radial_first_agree_at_grid_angles(hetero_surface,
+                                                         hetero_surface_legendre):
+    """Both methods reproduce the per-angle 1D `Potential` exactly at
+    grid angles (up to floating-point round-off), so they must agree
+    with each other there."""
+    for r in [4.5, 6.0, 8.0, 12.0]:
+        for angle in hetero_surface.angles_deg:
+            assert (hetero_surface_legendre.V(r, angle)
+                    == pytest.approx(hetero_surface.V(r, angle),
+                                     abs=1e-12))
+
+
+def test_legendre_smooth_between_grid_angles(hetero_surface_legendre,
+                                              hetero_surface):
+    """Between grid angles Legendre and radial_first can differ by their
+    interpolation choices, but the difference should stay small (both
+    interpolate the same 19 samples)."""
+    r = 6.0
+    for phi in [15.0, 45.0, 75.0, 105.0, 135.0, 165.0]:
+        val_leg = hetero_surface_legendre.V(r, phi)
+        val_rf = hetero_surface.V(r, phi)
+        if abs(val_rf) > 1e-12:
+            assert abs(val_leg - val_rf) / abs(val_rf) < 5e-2, (
+                f"disagreement at r={r}, phi={phi}: "
+                f"legendre={val_leg}, radial_first={val_rf}")
+
+
+def test_legendre_dV_dphi_matches_central_fd(hetero_surface_legendre):
+    """Legendre dV/dφ (analytic Jacobi-polynomial identity) must match a
+    central finite difference on V to high precision."""
+    r = 6.0
+    h_rad = 1e-4
+    h_deg = np.degrees(h_rad)
+    for phi in [20.0, 45.0, 90.0, 135.0]:
+        analytic = hetero_surface_legendre.dV_dphi(r, phi)
+        fd = ((hetero_surface_legendre.V(r, phi + h_deg)
+               - hetero_surface_legendre.V(r, phi - h_deg))
+              / (2.0 * h_rad))
+        assert analytic == pytest.approx(fd, rel=1e-4, abs=1e-14)
+
+
+def test_legendre_V_at_r_matches_scalar(hetero_surface_legendre):
+    r = 6.0
+    phis = np.array([12.5, 45.0, 77.5, 132.5])
+    vec = hetero_surface_legendre.V_at_r(r, phis)
+    scalar = np.array([hetero_surface_legendre.V(r, p) for p in phis])
+    assert np.allclose(vec, scalar, atol=1e-14)
+
+
+def test_legendre_truncated_n_terms(hetero_data):
+    """Fewer Legendre terms than angles gives a least-squares fit —
+    smoother in φ but no longer exact at grid points. Value at r=6°,
+    φ=45° should still be finite and roughly agree with radial_first."""
+    surf_12 = PotentialSurface(hetero_data, LONG_RANGE_POW,
+                                symmetry="heteronuclear",
+                                method="legendre", n_legendre_terms=12)
+    val = surf_12.V(6.0, 45.0)
+    assert np.isfinite(val)
+    ref = PotentialSurface(hetero_data, LONG_RANGE_POW,
+                            symmetry="heteronuclear").V(6.0, 45.0)
+    assert val == pytest.approx(ref, rel=1e-2)
+
+
+def test_legendre_default_n_terms(hetero_data):
+    """Default n_legendre_terms equals the number of grid angles."""
+    surf = PotentialSurface(hetero_data, LONG_RANGE_POW,
+                             symmetry="heteronuclear", method="legendre")
+    assert surf.n_legendre_terms == len(surf.angles_deg)
