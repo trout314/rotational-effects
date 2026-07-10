@@ -27,7 +27,11 @@ class Potential:
 
     Short range: V(r) = C * r^k  (power law fit to first two data points)
     Mid range:   Clamped cubic spline through tabulated data
-    Long range:  V(r) = long_coef * r^long_range_pow
+    Long range:  V(r) = long_coef * r^long_range_pow, except for the NLONG=3
+                 case (long_range_pow == -3), where a two-term form
+                 V(r) = C1/r^3 + C2/r^4 is fit to the two largest-separation
+                 points (charge-quadrupole leading term plus its r^-4
+                 correction).
 
     Provides V(r), V'(r), and V''(r) from a single spline.
     """
@@ -44,12 +48,26 @@ class Potential:
                           / np.log(distances[0] / distances[1]))
         self.short_coef = energies[0] / distances[0]**self.short_pow
 
-        # Long-range: V = long_coef * r^long_range_pow
-        self.long_coef = energies[-1] / distances[-1]**long_range_pow
+        # Long-range extrapolation.  For NLONG=3 use the two-term form
+        # V = C1/r^3 + C2/r^4, fit exactly through the last two tabulated
+        # points; otherwise the single power law V = long_coef * r^pow fit
+        # through the last point.
+        self.two_term_long = (long_range_pow == -3)
+        if self.two_term_long:
+            r1, r2 = distances[-2], distances[-1]
+            v1, v2 = energies[-2], energies[-1]
+            amat = np.array([[r1**-3, r1**-4],
+                             [r2**-3, r2**-4]])
+            self.long_c1, self.long_c2 = np.linalg.solve(amat, [v1, v2])
+            long_deriv = (-3 * self.long_c1 * self.rmax**-4
+                          - 4 * self.long_c2 * self.rmax**-5)
+        else:
+            self.long_coef = energies[-1] / distances[-1]**long_range_pow
+            long_deriv = (self.long_coef * long_range_pow
+                          * distances[-1]**(long_range_pow - 1))
 
         # Clamped cubic spline with matching derivatives at boundaries
         short_deriv = self.short_coef * self.short_pow * distances[0]**(self.short_pow - 1)
-        long_deriv = self.long_coef * long_range_pow * distances[-1]**(long_range_pow - 1)
         self._spline = CubicSpline(
             distances, energies, bc_type=((1, short_deriv), (1, long_deriv)))
         self._spline_d1 = self._spline.derivative(1)
@@ -60,6 +78,8 @@ class Potential:
         if r < self.rmin:
             return self.short_coef * r ** self.short_pow
         elif r > self.rmax:
+            if self.two_term_long:
+                return self.long_c1 * r**-3 + self.long_c2 * r**-4
             return self.long_coef * r ** self.long_range_pow
         return float(self._spline(r))
 
@@ -68,6 +88,8 @@ class Potential:
         if r < self.rmin:
             return self.short_coef * self.short_pow * r ** (self.short_pow - 1)
         elif r > self.rmax:
+            if self.two_term_long:
+                return -3 * self.long_c1 * r**-4 - 4 * self.long_c2 * r**-5
             return self.long_coef * self.long_range_pow * r ** (self.long_range_pow - 1)
         return float(self._spline_d1(r))
 
@@ -77,6 +99,8 @@ class Potential:
             return (self.short_coef * self.short_pow * (self.short_pow - 1)
                     * r ** (self.short_pow - 2))
         elif r > self.rmax:
+            if self.two_term_long:
+                return 12 * self.long_c1 * r**-5 + 20 * self.long_c2 * r**-6
             n = self.long_range_pow
             return self.long_coef * n * (n - 1) * r ** (n - 2)
         return float(self._spline_d2(r))
